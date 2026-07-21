@@ -10,6 +10,7 @@ import type { SpaceDTO } from "@/types";
 
 export function OperationsDashboard() {
   const [selectedSpace, setSelectedSpace] = useState<SpaceDTO | null>(null);
+  const [selectedSeatIndex, setSelectedSeatIndex] = useState<number>(0);
   const [refreshSignal, setRefreshSignal] = useState(0);
 
   return (
@@ -21,11 +22,17 @@ export function OperationsDashboard() {
         </p>
       </div>
 
-      <InteractiveFloorMap onSelectSpace={setSelectedSpace} />
+      <InteractiveFloorMap
+        onSelectSpace={(space, seatIndex) => {
+          setSelectedSpace(space);
+          setSelectedSeatIndex(seatIndex);
+        }}
+      />
 
       {selectedSpace && (
         <QuickBookingPanel
           space={selectedSpace}
+          seatIndex={selectedSeatIndex}
           onClose={() => setSelectedSpace(null)}
           onCreated={() => {
             setRefreshSignal((n) => n + 1);

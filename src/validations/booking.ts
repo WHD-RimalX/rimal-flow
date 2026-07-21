@@ -37,6 +37,10 @@ export const createBookingSchema = z
     // عميل موجود بالنظام من خريطة المقر أو لوحة التحكم)
     customerUserId: z.string().trim().min(1).optional(),
 
+    // رقم المقعد المرئي (0-based) — يُملأ فقط عند التخصيص اليدوي من خريطة المقر؛
+    // إشغال الخريطة يدوي بالكامل وليس مشتقاً تلقائياً من حالة الحجز.
+    seatIndex: z.coerce.number().int().min(0).optional(),
+
     // بيانات حجز الضيف (اختيارية إن كان المستخدم مسجلاً دخوله أو تم اختيار customerUserId)
     guestName: z.string().trim().min(2, "الاسم قصير جداً").max(100).optional(),
     guestPhone: z

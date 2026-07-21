@@ -7,6 +7,8 @@ import type { BookingDTO, SpaceDTO, UserSearchResultDTO } from "@/types";
 
 interface QuickBookingPanelProps {
   space: SpaceDTO;
+  /** المقعد المرئي المحدَّد على الخريطة — يُحفظ في الحجز ليبقى إشغال الخريطة يدوياً بالكامل. */
+  seatIndex: number;
   onClose: () => void;
   onCreated: () => void;
 }
@@ -18,7 +20,7 @@ interface QuickBookingPanelProps {
  * قاعدة إلزامية: لا يمكن إنشاء الحجز بدون تحديد مستفيد فعلي (عميل مسجَّل أو ضيف).
  * لا يوجد اختيار لنوع الباقة هنا — هذا تسكين فوري (Walk-in) بواقة الساعة القياسية.
  */
-export function QuickBookingPanel({ space, onClose, onCreated }: QuickBookingPanelProps) {
+export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: QuickBookingPanelProps) {
   const [mode, setMode] = useState<"search" | "guest">("search");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<UserSearchResultDTO[]>([]);
@@ -63,6 +65,7 @@ export function QuickBookingPanel({ space, onClose, onCreated }: QuickBookingPan
     try {
       const payload: Record<string, unknown> = {
         spaceId: space.id,
+        seatIndex,
         bookingType: "HOURLY",
         startTime: new Date().toISOString(),
       };

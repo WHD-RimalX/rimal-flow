@@ -23,14 +23,14 @@ import type { BookingDTO, SpaceDTO } from "@/types";
  *    floor.occupied (محجوز) / floor.facility (مرافق غير قابلة للحجز)، بالإضافة
  *    إلى floor.alert (تنبيه أحمر-أرجواني) عند اقتراب انتهاء وقت الحجز (≤30 دقيقة).
  *
- * ملاحظة تقنية: قاعدة البيانات تتعقّب سعة كل مساحة كرقم إجمالي (capacityUnits)
- * دون ترقيم مقاعد فردي دائم. لعرض حالة كل "مقعد" على الخريطة، تُحسب المقاعد
- * المحجوزة من عدد الحجوزات النشطة حالياً لكل مساحة، وتُسند لأول N مقعد بترتيب
- * ثابت (بحسب وقت إنشاء الحجز) — تمثيل عرضي وليس ترقيماً فعلياً مخزَّناً في DB.
+ * إشغال الخريطة يدوي بالكامل ومقصود: مقعد لا يظهر مشغولاً إلا إذا خصّصه موظف
+ * الاستقبال صراحة لعميل بعينه عبر البحث والتخصيص (Booking.seatIndex) — حجز عادي
+ * يُنشأ من صفحة الحجز العامة لا يظهر على الخريطة إطلاقاً حتى يُسكَّن يدوياً هنا.
  */
 
 interface SeatInfo {
   key: string;
+  seatIndex: number;
   spaceName: string;
   seatLabel: string;
   price: number | null;
@@ -42,7 +42,7 @@ interface SeatInfo {
 }
 
 interface InteractiveFloorMapProps {
-  onSelectSpace?: (space: SpaceDTO) => void;
+  onSelectSpace?: (space: SpaceDTO, seatIndex: number) => void;
 }
 
 const SLUGS = {
@@ -89,17 +89,25 @@ function useFloorMapData() {
   return { spaces, bookings, loading };
 }
 
-/** الحجوزات (محجوزة أو حاضرة الآن) لمساحة معينة تتداخل مع الوقت الحالي — تظهر كمقاعد مشغولة على الخريطة. */
-function activeBookingsForSpace(bookings: BookingDTO[], spaceId: string, now: number) {
-  return bookings
-    .filter(
-      (b) =>
-        b.spaceId === spaceId &&
-        (b.status === "CHECKED_IN" || b.status === "CONFIRMED") &&
-        new Date(b.startTime).getTime() <= now &&
-        new Date(b.endTime).getTime() >= now
-    )
-    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+/**
+ * الحجز المخصَّص يدوياً لمقعد مرئي بعينه (seatIndex) ضمن مساحة معينة، إن تداخل
+ * مع الوقت الحالي. هذا هو المصدر الوحيد لتحديد الإشغال على الخريطة — حجوزات لم
+ * تُخصَّص لمقعد (seatIndex = null) لا تظهر مشغولة هنا إطلاقاً مهما كانت حالتها.
+ */
+function findBookingForSeat(
+  bookings: BookingDTO[],
+  spaceId: string,
+  seatIndex: number,
+  now: number
+): BookingDTO | undefined {
+  return bookings.find(
+    (b) =>
+      b.spaceId === spaceId &&
+      b.seatIndex === seatIndex &&
+      (b.status === "PENDING" || b.status === "CONFIRMED" || b.status === "CHECKED_IN") &&
+      new Date(b.startTime).getTime() <= now &&
+      new Date(b.endTime).getTime() >= now
+  );
 }
 
 function buildSeatInfo(
@@ -108,13 +116,15 @@ function buildSeatInfo(
   price: number | null,
   booking: BookingDTO | undefined,
   now: number,
-  key: string
+  key: string,
+  seatIndex: number
 ): SeatInfo {
   const liveState =
     booking?.status === "CHECKED_IN" ? computeLiveState(findActiveCheckInLog(booking.checkInLogs), now) : null;
 
   return {
     key,
+    seatIndex,
     spaceName,
     seatLabel,
     price,
@@ -218,15 +228,14 @@ function HallCard({
   space: SpaceDTO | undefined;
   bookings: BookingDTO[];
   now: number;
-  onSelect?: (space: SpaceDTO) => void;
+  onSelect?: (space: SpaceDTO, seatIndex: number) => void;
   className?: string;
   size?: "md" | "lg";
 }) {
   if (!space) return null;
-  const active = activeBookingsForSpace(bookings, space.id, now);
-  const booking = active[0];
+  const booking = findBookingForSeat(bookings, space.id, 0, now);
   const price = space.hourlyPrice ? Number(space.hourlyPrice) : null;
-  const seat = buildSeatInfo(space.name, "القاعة كاملة", price, booking, now, space.id);
+  const seat = buildSeatInfo(space.name, "القاعة كاملة", price, booking, now, space.id, 0);
   const alert = isRedAlert(seat);
   const bg = seat.occupied ? (alert ? "bg-floor-alert" : "bg-floor-occupied") : "bg-floor-available";
 
@@ -234,7 +243,7 @@ function HallCard({
     <div className={`group relative ${className}`}>
       <button
         type="button"
-        onClick={seat.clickable ? () => onSelect?.(space) : undefined}
+        onClick={seat.clickable ? () => onSelect?.(space, 0) : undefined}
         disabled={!seat.clickable}
         className={`flex h-full w-full flex-col items-center justify-center gap-2 rounded-3xl px-4 text-center shadow-[0_6px_20px_rgba(115,79,150,0.2)] transition
           ${bg}
@@ -309,35 +318,35 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
   // الفعلية المخزَّنة (capacityUnits=17) لمطابقة المخطط المعماري المرفق بدقة —
   // هذا تمثيل عرضي فقط؛ التحقق من التعارض والسعة الفعلية عند الحجز يبقى من السيرفر
   // حصراً بناءً على capacityUnits الحقيقي، بصرف النظر عن عدد المقاعد المرسومة هنا.
-  const TOTAL_VISUAL_SHARED_SEATS = 26;
+  const TOTAL_VISUAL_SHARED_SEATS = 25;
 
   const sharedSeats: SeatInfo[] = useMemo(() => {
     if (!shared) return [];
-    const active = activeBookingsForSpace(bookings, shared.id, now);
     const price = shared.hourlyPrice ? Number(shared.hourlyPrice) : null;
-    return Array.from({ length: TOTAL_VISUAL_SHARED_SEATS }, (_, i) =>
-      buildSeatInfo(shared.name, `مقعد رقم ${i + 1}`, price, active[i], now, `${shared.id}-${i}`)
-    );
+    return Array.from({ length: TOTAL_VISUAL_SHARED_SEATS }, (_, i) => {
+      const booking = findBookingForSeat(bookings, shared.id, i, now);
+      return buildSeatInfo(shared.name, `مقعد رقم ${i + 1}`, price, booking, now, `${shared.id}-${i}`, i);
+    });
   }, [shared, bookings, now]);
 
   const dualSeats: SeatInfo[] = useMemo(() => {
     if (!dual) return [];
-    const active = activeBookingsForSpace(bookings, dual.id, now);
     const price = dual.hourlyPrice ? Number(dual.hourlyPrice) : null;
-    return Array.from({ length: dual.capacityUnits }, (_, i) =>
-      buildSeatInfo(dual.name, `طاولة ثنائية رقم ${i + 1}`, price, active[i], now, `${dual.id}-${i}`)
-    );
+    return Array.from({ length: dual.capacityUnits }, (_, i) => {
+      const booking = findBookingForSeat(bookings, dual.id, i, now);
+      return buildSeatInfo(dual.name, `طاولة ثنائية رقم ${i + 1}`, price, booking, now, `${dual.id}-${i}`, i);
+    });
   }, [dual, bookings, now]);
 
-  // توزيع الـ 26 مقعداً المرسومة حسب المخطط: 6 بعمود رأسي يمين الدور الأرضي،
+  // توزيع الـ 25 مقعداً المرسومة حسب المخطط: 5 بعمود رأسي يمين الدور الأرضي،
   // 8 على شكل حرف L أقصى يسار الدور العلوي، و12 (صفّان متقابلان) يمين الدور العلوي.
-  const sharedGround = sharedSeats.slice(0, 6);
-  const sharedLShape = sharedSeats.slice(6, 14);
-  const sharedFirstRowA = sharedSeats.slice(14, 20);
-  const sharedFirstRowB = sharedSeats.slice(20, 26);
+  const sharedGround = sharedSeats.slice(0, 5);
+  const sharedLShape = sharedSeats.slice(5, 13);
+  const sharedFirstRowA = sharedSeats.slice(13, 19);
+  const sharedFirstRowB = sharedSeats.slice(19, 25);
 
-  function handleSeatClick(space: SpaceDTO | undefined) {
-    if (space) onSelectSpace?.(space);
+  function handleSeatClick(space: SpaceDTO | undefined, seatIndex: number) {
+    if (space) onSelectSpace?.(space, seatIndex);
   }
 
   return (
@@ -386,7 +395,7 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
               <p className="text-[11px] text-gray-500">مساحة عمل مشتركة</p>
               <div className="flex flex-col gap-2">
                 {sharedGround.map((seat) => (
-                  <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared)} />
+                  <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
                 ))}
               </div>
             </div>
@@ -431,13 +440,13 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                 <div className="space-y-2">
                   <div className="flex flex-wrap justify-center gap-2">
                     {sharedFirstRowA.map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
                     ))}
                   </div>
                   <div className="mx-auto h-px w-2/3 bg-rimal-purple/10" />
                   <div className="flex flex-wrap justify-center gap-2">
                     {sharedFirstRowB.map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
                     ))}
                   </div>
                 </div>
@@ -465,7 +474,7 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                     <div key={seat.key} className="group relative">
                       <button
                         type="button"
-                        onClick={seat.clickable ? () => handleSeatClick(dual) : undefined}
+                        onClick={seat.clickable ? () => handleSeatClick(dual, seat.seatIndex) : undefined}
                         disabled={!seat.clickable}
                         className={`h-11 w-20 rounded-2xl ${bg} shadow-[0_2px_6px_rgba(115,79,150,0.25)] transition hover:-translate-y-0.5 hover:shadow-[0_6px_14px_rgba(115,79,150,0.35)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white ${
                           alert ? "animate-pulse-soft" : ""
@@ -497,12 +506,12 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                 <div className="flex flex-col items-end gap-2">
                   <div className="flex gap-2">
                     {sharedLShape.slice(0, 4).map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
                     ))}
                   </div>
                   <div className="flex flex-col gap-2">
                     {sharedLShape.slice(4, 8).map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
                     ))}
                   </div>
                 </div>

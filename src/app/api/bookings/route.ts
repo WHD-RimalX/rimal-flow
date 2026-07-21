@@ -60,6 +60,23 @@ export async function POST(req: NextRequest) {
 
     await assertNoBookingConflict(space, data.startTime, endTime);
 
+    // إن كان هذا تخصيصاً يدوياً لمقعد محدَّد من الخريطة، تأكد أن هذا المقعد بالذات
+    // غير مشغول فعلياً بحجز آخر متداخل زمنياً (منفصل عن سعة المساحة الإجمالية أعلاه).
+    if (data.seatIndex !== undefined) {
+      const seatTaken = await prisma.booking.findFirst({
+        where: {
+          spaceId: space.id,
+          seatIndex: data.seatIndex,
+          status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
+          startTime: { lt: endTime },
+          endTime: { gt: data.startTime },
+        },
+      });
+      if (seatTaken) {
+        return NextResponse.json({ error: "هذا المقعد مشغول بالفعل بحجز آخر في هذا التوقيت" }, { status: 409 });
+      }
+    }
+
     // خصم الطلاب يُطبَّق فقط إن كانت المساحة تدعمه؛ وإلا يُتجاهل حتى لو طلبه العميل.
     // عند التخصيص لعميل مسجَّل، يُعتمد على حقل isStudent الموثّق في حسابه بدل تصريح الموظف اليدوي.
     const requestedStudent = targetCustomerId ? targetCustomerIsStudent : data.isStudent;
@@ -78,6 +95,7 @@ export async function POST(req: NextRequest) {
         guestPhone: targetCustomerId ? null : bookAsGuest ? data.guestPhone : null,
         guestEmail: targetCustomerId ? null : bookAsGuest ? data.guestEmail ?? null : null,
         spaceId: space.id,
+        seatIndex: data.seatIndex ?? null,
         bookingType: data.bookingType,
         startTime: data.startTime,
         endTime,

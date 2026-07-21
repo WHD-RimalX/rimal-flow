@@ -55,6 +55,8 @@ export interface BookingDTO {
   guestEmail: string | null;
   spaceId: string;
   space: SpaceDTO;
+  /** رقم المقعد المرئي (0-based) عند التخصيص اليدوي من خريطة المقر — null إن لم يُخصَّص لمقعد بعينه. */
+  seatIndex: number | null;
   bookingType: BookingType;
   startTime: string;
   endTime: string;

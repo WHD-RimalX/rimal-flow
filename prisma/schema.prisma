@@ -128,6 +128,12 @@ model Booking {
   spaceId String
   space   Space  @relation(fields: [spaceId], references: [id])
 
+  // رقم المقعد المرئي على خريطة المقر (0-based) — يُملأ فقط عندما يُسكِّن موظف
+  // الاستقبال العميل يدوياً عبر البحث والتخصيص من الخريطة. الحجوزات العادية عبر
+  // صفحة الحجز العامة تبقى null ولا تظهر مشغولة تلقائياً على الخريطة — عرض
+  // الإشغال على الخريطة مقصود أن يكون يدوياً بالكامل، وليس مشتقاً تلقائياً من حالة الحجز.
+  seatIndex Int?
+
   bookingType BookingType
   startTime   DateTime
   endTime     DateTime
@@ -148,6 +154,7 @@ model Booking {
   checkInLogs CheckInLog[]
 
   @@index([spaceId, startTime, endTime])
+  @@index([spaceId, seatIndex])
   @@index([status])
   @@index([userId])
   @@map("bookings")
