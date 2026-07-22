@@ -73,11 +73,18 @@ export const guestContactRequiredSchema = z.object({
   guestEmail: z.string().trim().email("بريد إلكتروني غير صالح").optional(),
 });
 
-export const updateBookingStatusSchema = z.object({
-  bookingId: z.string().min(1),
-  status: bookingStatusEnum,
-  reason: z.string().trim().max(500).optional(),
-});
+export const updateBookingStatusSchema = z
+  .object({
+    bookingId: z.string().min(1),
+    status: bookingStatusEnum.optional(),
+    reason: z.string().trim().max(500).optional(),
+    // تعيين/إلغاء تعيين مقعد مرئي على الخريطة — منفصل عن حالة الحجز نفسها.
+    // null تعني "أزل التخصيص عن الخريطة" دون التأثير على حالة الحجز.
+    seatIndex: z.union([z.coerce.number().int().min(0), z.null()]).optional(),
+  })
+  .refine((data) => data.status !== undefined || data.seatIndex !== undefined, {
+    message: "يجب تمرير status أو seatIndex على الأقل",
+  });
 
 export type UpdateBookingStatusInput = z.infer<typeof updateBookingStatusSchema>;
 

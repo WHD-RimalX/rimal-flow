@@ -37,12 +37,17 @@ interface SeatInfo {
   occupied: boolean;
   confirmedNotArrived: boolean;
   customerName?: string | null;
-  clickable: boolean;
+  booking?: BookingDTO;
   liveState: LiveAttendanceState | null;
 }
 
 interface InteractiveFloorMapProps {
+  /** يُستدعى عند الضغط على مقعد متاح — لفتح نافذة البحث والتخصيص. */
   onSelectSpace?: (space: SpaceDTO, seatIndex: number) => void;
+  /** يُستدعى عند الضغط على مقعد مشغول — لفتح نافذة إدارته (تسجيل خروج/إلغاء تخصيص). */
+  onManageSeat?: (booking: BookingDTO) => void;
+  /** أي تغيير في هذه القيمة يجبر الخريطة على إعادة التحميل فوراً (بعد تسكين/خروج/إلغاء) — يربطها بلوحة التحكم الزمنية. */
+  refreshSignal?: number;
 }
 
 const SLUGS = {
@@ -54,7 +59,7 @@ const SLUGS = {
   training: "open-training-hall",
 } as const;
 
-function useFloorMapData() {
+function useFloorMapData(refreshSignal: number) {
   const [spaces, setSpaces] = useState<SpaceDTO[]>([]);
   const [bookings, setBookings] = useState<BookingDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,7 +89,7 @@ function useFloorMapData() {
       mounted = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [refreshSignal]);
 
   return { spaces, bookings, loading };
 }
@@ -131,7 +136,7 @@ function buildSeatInfo(
     occupied: Boolean(booking),
     confirmedNotArrived: booking?.status === "CONFIRMED",
     customerName: booking?.user?.name ?? booking?.guestName ?? null,
-    clickable: !booking,
+    booking,
     liveState,
   };
 }
@@ -179,13 +184,11 @@ function Seat({ seat, onClick, className = "" }: { seat: SeatInfo; onClick?: () 
     <div className={`group relative ${className}`}>
       <button
         type="button"
-        onClick={seat.clickable ? onClick : undefined}
-        disabled={!seat.clickable}
-        className={`h-9 w-9 rounded-xl ${bg} shadow-[0_2px_6px_rgba(115,79,150,0.25)] transition
+        onClick={onClick}
+        className={`h-9 w-9 rounded-xl ${bg} cursor-pointer shadow-[0_2px_6px_rgba(115,79,150,0.25)] transition
           hover:-translate-y-0.5 hover:shadow-[0_6px_14px_rgba(115,79,150,0.35)]
           focus:outline-none focus-visible:ring-2 focus-visible:ring-white
-          ${alert ? "animate-pulse-soft" : ""}
-          ${seat.clickable ? "cursor-pointer" : "cursor-default opacity-90"}`}
+          ${alert ? "animate-pulse-soft" : ""}`}
         aria-label={seat.seatLabel}
       />
 
@@ -222,6 +225,7 @@ function HallCard({
   bookings,
   now,
   onSelect,
+  onManageSeat,
   className = "",
   size = "md",
 }: {
@@ -229,6 +233,7 @@ function HallCard({
   bookings: BookingDTO[];
   now: number;
   onSelect?: (space: SpaceDTO, seatIndex: number) => void;
+  onManageSeat?: (booking: BookingDTO) => void;
   className?: string;
   size?: "md" | "lg";
 }) {
@@ -243,15 +248,13 @@ function HallCard({
     <div className={`group relative ${className}`}>
       <button
         type="button"
-        onClick={seat.clickable ? () => onSelect?.(space, 0) : undefined}
-        disabled={!seat.clickable}
-        className={`flex h-full w-full flex-col items-center justify-center gap-2 rounded-3xl px-4 text-center shadow-[0_6px_20px_rgba(115,79,150,0.2)] transition
+        onClick={() => (seat.booking ? onManageSeat?.(seat.booking) : onSelect?.(space, 0))}
+        className={`flex h-full w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-3xl px-4 text-center shadow-[0_6px_20px_rgba(115,79,150,0.2)] transition
           ${bg}
           ${size === "lg" ? "py-8" : "py-6"}
           hover:-translate-y-0.5 hover:shadow-[0_10px_26px_rgba(115,79,150,0.3)]
           focus:outline-none focus-visible:ring-2 focus-visible:ring-white
-          ${alert ? "animate-pulse-soft" : ""}
-          ${seat.clickable ? "cursor-pointer" : "cursor-default opacity-95"}`}
+          ${alert ? "animate-pulse-soft" : ""}`}
       >
         <span className={`font-extrabold ${seat.occupied ? "text-white" : "text-rimal-purple-dark"}`}>
           {space.name}
@@ -299,8 +302,8 @@ const FLOOR_TABS: { id: FloorId; label: string }[] = [
   { id: "first", label: "الدور العلوي" },
 ];
 
-export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps) {
-  const { spaces, bookings, loading } = useFloorMapData();
+export function InteractiveFloorMap({ onSelectSpace, onManageSeat, refreshSignal = 0 }: InteractiveFloorMapProps) {
+  const { spaces, bookings, loading } = useFloorMapData(refreshSignal);
   const [floor, setFloor] = useState<FloorId>("ground");
   // يُشغَّل هذا العدّاد كل ثانية فقط لدفع إعادة رسم المؤقتات الحية على الخريطة
   const now = useNow(1000);
@@ -345,8 +348,13 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
   const sharedFirstRowA = sharedSeats.slice(13, 19);
   const sharedFirstRowB = sharedSeats.slice(19, 25);
 
-  function handleSeatClick(space: SpaceDTO | undefined, seatIndex: number) {
-    if (space) onSelectSpace?.(space, seatIndex);
+  function handleSeatInteract(space: SpaceDTO | undefined, seat: SeatInfo) {
+    if (!space) return;
+    if (seat.booking) {
+      onManageSeat?.(seat.booking);
+    } else {
+      onSelectSpace?.(space, seat.seatIndex);
+    }
   }
 
   return (
@@ -395,7 +403,7 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
               <p className="text-[11px] text-gray-500">مساحة عمل مشتركة</p>
               <div className="flex flex-col gap-2">
                 {sharedGround.map((seat) => (
-                  <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
+                  <Seat key={seat.key} seat={seat} onClick={() => handleSeatInteract(shared, seat)} />
                 ))}
               </div>
             </div>
@@ -409,7 +417,8 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                   space={spaceBySlug[SLUGS.pod]}
                   bookings={bookings}
                   now={now}
-                  onSelect={handleSeatClick}
+                  onSelect={onSelectSpace}
+                  onManageSeat={onManageSeat}
                   className="w-44"
                 />
               </div>
@@ -440,13 +449,13 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                 <div className="space-y-2">
                   <div className="flex flex-wrap justify-center gap-2">
                     {sharedFirstRowA.map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatInteract(shared, seat)} />
                     ))}
                   </div>
                   <div className="mx-auto h-px w-2/3 bg-rimal-purple/10" />
                   <div className="flex flex-wrap justify-center gap-2">
                     {sharedFirstRowB.map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatInteract(shared, seat)} />
                     ))}
                   </div>
                 </div>
@@ -457,7 +466,8 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                 space={spaceBySlug[SLUGS.training]}
                 bookings={bookings}
                 now={now}
-                onSelect={handleSeatClick}
+                onSelect={onSelectSpace}
+                onManageSeat={onManageSeat}
                 size="lg"
                 className="w-full"
               />
@@ -474,11 +484,10 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                     <div key={seat.key} className="group relative">
                       <button
                         type="button"
-                        onClick={seat.clickable ? () => handleSeatClick(dual, seat.seatIndex) : undefined}
-                        disabled={!seat.clickable}
-                        className={`h-11 w-20 rounded-2xl ${bg} shadow-[0_2px_6px_rgba(115,79,150,0.25)] transition hover:-translate-y-0.5 hover:shadow-[0_6px_14px_rgba(115,79,150,0.35)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                        onClick={() => handleSeatInteract(dual, seat)}
+                        className={`h-11 w-20 cursor-pointer rounded-2xl ${bg} shadow-[0_2px_6px_rgba(115,79,150,0.25)] transition hover:-translate-y-0.5 hover:shadow-[0_6px_14px_rgba(115,79,150,0.35)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white ${
                           alert ? "animate-pulse-soft" : ""
-                        } ${seat.clickable ? "cursor-pointer" : "cursor-default opacity-90"}`}
+                        }`}
                         aria-label={seat.seatLabel}
                       />
                       <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-48 -translate-x-1/2 rounded-2xl bg-white/95 p-3 text-right opacity-0 shadow-[0_10px_30px_rgba(76,53,105,0.25)] transition-all duration-150 group-hover:opacity-100">
@@ -498,20 +507,26 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
               </div>
             </div>
 
-            {/* أقصى اليسار: 8 مقاعد على شكل حرف L، ثم لاونج VIP، ثم قاعة الابتكار تحتها مباشرة */}
+            {/* أقصى اليسار: عناصر هيكلية علوية، ثم 8 مقاعد على شكل حرف L، ثم لاونج VIP، ثم قاعة الابتكار تحتها مباشرة */}
             <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-3">
+                {[1, 2, 3].map((i) => (
+                  <FacilityBlock key={i} className="h-12 w-12" />
+                ))}
+              </div>
+
               <div>
                 <p className="mb-2 text-center text-[11px] text-gray-500">مساحة عمل مشتركة</p>
                 {/* items-end تُحاذي الصف والعمود لنفس الحافة (أقصى اليسار) فيرتسم شكل حرف L/٦ معكوس بدقة */}
                 <div className="flex flex-col items-end gap-2">
                   <div className="flex gap-2">
                     {sharedLShape.slice(0, 4).map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatInteract(shared, seat)} />
                     ))}
                   </div>
                   <div className="flex flex-col gap-2">
                     {sharedLShape.slice(4, 8).map((seat) => (
-                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatClick(shared, seat.seatIndex)} />
+                      <Seat key={seat.key} seat={seat} onClick={() => handleSeatInteract(shared, seat)} />
                     ))}
                   </div>
                 </div>
@@ -522,7 +537,8 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                 space={spaceBySlug[SLUGS.vip]}
                 bookings={bookings}
                 now={now}
-                onSelect={handleSeatClick}
+                onSelect={onSelectSpace}
+                onManageSeat={onManageSeat}
                 size="lg"
                 className="w-full"
               />
@@ -530,7 +546,8 @@ export function InteractiveFloorMap({ onSelectSpace }: InteractiveFloorMapProps)
                 space={spaceBySlug[SLUGS.innovation]}
                 bookings={bookings}
                 now={now}
-                onSelect={handleSeatClick}
+                onSelect={onSelectSpace}
+                onManageSeat={onManageSeat}
                 size="lg"
                 className="w-full"
               />

@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api-client";
-import { formatSAR } from "@/lib/utils";
-import type { BookingDTO, SpaceDTO, UserSearchResultDTO } from "@/types";
+import type { BookingDTO, SpaceDTO } from "@/types";
 
 interface QuickBookingPanelProps {
   space: SpaceDTO;
@@ -13,19 +12,27 @@ interface QuickBookingPanelProps {
   onCreated: () => void;
 }
 
+const VENUE_QR_CODE = process.env.NEXT_PUBLIC_VENUE_QR_CODE ?? "RIMALX-HQ-MAIN-BRANCH-0001";
+
+function customerLabel(b: BookingDTO): { name: string; phone: string | null } {
+  return { name: b.user?.name ?? b.guestName ?? "بدون اسم", phone: b.user?.phone ?? b.guestPhone };
+}
+
 /**
- * نافذة تخصيص الحجز اليدوي — تظهر كـ Modal عند اختيار مقعد/مساحة متاحة من خريطة المقر.
- * تتيح لموظف الاستقبال البحث الفوري عن عميل مسجَّل بالاسم أو رقم الجوال وتعيينه مباشرة،
- * أو إدخال بيانات عميل جديد (ضيف) إن لم يكن موجوداً في النظام.
- * قاعدة إلزامية: لا يمكن إنشاء الحجز بدون تحديد مستفيد فعلي (عميل مسجَّل أو ضيف).
- * لا يوجد اختيار لنوع الباقة هنا — هذا تسكين فوري (Walk-in) بواقة الساعة القياسية.
+ * نافذة تخصيص المقعد اليدوي — تظهر كـ Modal عند اختيار مقعد متاح من خريطة المقر.
+ * القائمة تقتصر عمداً على الحاضرين المسجَّل دخولهم اليوم (CHECKED_IN) وغير
+ * مخصَّصين لمقعد بعد — وليس كامل قاعدة بيانات العملاء — لأن التخصيص هنا هو
+ * وضع مرئي فقط لشخص موجود بالفعل، وليس إنشاء حجز جديد له (فلا يُحتسب حجزاً
+ * مكرَّراً). اختيار أحدهم يحدِّث حجزه الموجود فقط (seatIndex)، دون إنشاء حجز جديد.
+ * تبويب "ضيف جديد" مخصَّص فقط لمن وصل للتو ولا يوجد له حجز مسبق: يُنشئ حجزاً
+ * ويسجّل حضوره فوراً (Check-in حقيقي بمؤقّت) ثم يخصّصه لهذا المقعد.
  */
 export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: QuickBookingPanelProps) {
-  const [mode, setMode] = useState<"search" | "guest">("search");
+  const [mode, setMode] = useState<"present" | "guest">("present");
+
+  const [presentBookings, setPresentBookings] = useState<BookingDTO[] | null>(null);
+  const [loadingPresent, setLoadingPresent] = useState(true);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<UserSearchResultDTO[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<UserSearchResultDTO | null>(null);
 
   const [guestName, setGuestName] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
@@ -34,64 +41,70 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BookingDTO | null>(null);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query.trim().length < 2 || selectedUser) {
-      setResults([]);
-      return;
-    }
-    setSearching(true);
-    debounceRef.current = setTimeout(() => {
-      apiFetch<{ users: UserSearchResultDTO[] }>(`/api/users/search?q=${encodeURIComponent(query.trim())}`)
-        .then((res) => setResults(res.users))
-        .catch(() => setResults([]))
-        .finally(() => setSearching(false));
-    }, 300);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [query, selectedUser]);
+    const today = new Date().toISOString().slice(0, 10);
+    apiFetch<{ bookings: BookingDTO[] }>(`/api/bookings?date=${today}&status=CHECKED_IN`)
+      .then((res) => setPresentBookings(res.bookings.filter((b) => b.seatIndex === null)))
+      .catch(() => setPresentBookings([]))
+      .finally(() => setLoadingPresent(false));
+  }, []);
 
-  const studentEligible = Number(space.studentDiscount) > 0;
-  const effectiveIsStudent = mode === "search" && selectedUser ? selectedUser.isStudent : false;
+  const filteredPresent = useMemo(() => {
+    if (!presentBookings) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return presentBookings;
+    return presentBookings.filter((b) => {
+      const { name, phone } = customerLabel(b);
+      return name.toLowerCase().includes(q) || (phone ?? "").includes(q);
+    });
+  }, [presentBookings, query]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function assignExisting(booking: BookingDTO) {
     setSubmitting(true);
     setError(null);
-
     try {
-      const payload: Record<string, unknown> = {
-        spaceId: space.id,
-        seatIndex,
-        bookingType: "HOURLY",
-        startTime: new Date().toISOString(),
-      };
-
-      if (mode === "search") {
-        if (!selectedUser) {
-          setError("يرجى اختيار عميل من نتائج البحث أولاً");
-          setSubmitting(false);
-          return;
-        }
-        payload.customerUserId = selectedUser.id;
-        payload.isStudent = selectedUser.isStudent;
-      } else {
-        payload.guestName = guestName;
-        payload.guestPhone = guestPhone;
-        payload.isStudent = false;
-      }
-
-      const res = await apiFetch<{ booking: BookingDTO }>("/api/bookings", {
-        method: "POST",
-        body: JSON.stringify(payload),
+      const res = await apiFetch<{ booking: BookingDTO }>(`/api/bookings/${booking.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ seatIndex }),
       });
       setResult(res.booking);
       onCreated();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "تعذّر إنشاء الحجز");
+      setError(err instanceof ApiError ? err.message : "تعذّر تخصيص المقعد");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function createAndCheckInGuest(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const created = await apiFetch<{ booking: BookingDTO }>("/api/bookings", {
+        method: "POST",
+        body: JSON.stringify({
+          spaceId: space.id,
+          seatIndex,
+          bookingType: "HOURLY",
+          startTime: new Date().toISOString(),
+          guestName,
+          guestPhone,
+        }),
+      });
+      // تسجيل حضور فعلي فوري (نفس محرك الـ QR) حتى يعمل المؤقّت التنازلي بشكل صحيح
+      const checkedIn = await apiFetch<{ booking: BookingDTO }>("/api/checkin", {
+        method: "POST",
+        body: JSON.stringify({
+          bookingCode: created.booking.bookingCode,
+          action: "CHECK_IN",
+          qrCode: VENUE_QR_CODE,
+        }),
+      });
+      setResult(checkedIn.booking);
+      onCreated();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر تسجيل الضيف");
     } finally {
       setSubmitting(false);
     }
@@ -108,7 +121,7 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
       >
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-500">تخصيص حجز يدوي — من خريطة المقر</p>
+            <p className="text-xs text-gray-500">تخصيص مقعد — من خريطة المقر</p>
             <h3 className="text-base font-bold text-gray-900">{space.name}</h3>
           </div>
           <button
@@ -121,24 +134,22 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
 
         {result ? (
           <div className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">
-            تم تأكيد الحجز بكود <span className="font-mono font-bold">{result.bookingCode}</span> بقيمة{" "}
-            {formatSAR(Number(result.finalPrice))}.
+            تم تخصيص المقعد بنجاح لكود الحجز <span className="font-mono font-bold">{result.bookingCode}</span>.
             <button onClick={onClose} className="btn-primary mt-4 w-full">
               إغلاق
             </button>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* التبديل بين البحث عن عميل مسجَّل أو إدخال ضيف جديد */}
+          <div className="space-y-4">
             <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
               <button
                 type="button"
-                onClick={() => setMode("search")}
+                onClick={() => setMode("present")}
                 className={`flex-1 rounded-lg py-2 text-xs font-bold transition ${
-                  mode === "search" ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
+                  mode === "present" ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
                 }`}
               >
-                عميل مسجَّل
+                الحاضرون الآن
               </button>
               <button
                 type="button"
@@ -147,68 +158,56 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
                   mode === "guest" ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
                 }`}
               >
-                عميل جديد (ضيف)
+                ضيف جديد (تسجيل فوري)
               </button>
             </div>
 
-            {mode === "search" ? (
+            {mode === "present" ? (
               <div>
-                <label className="label-field">ابحث بالاسم أو رقم الجوال</label>
-                {selectedUser ? (
-                  <div className="flex items-center justify-between rounded-xl border-0 bg-rimal-purple-50 px-4 py-2.5">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">{selectedUser.name}</p>
-                      <p className="text-xs text-gray-500">
-                        {selectedUser.phone ?? selectedUser.email}
-                        {selectedUser.isStudent && " · طالب"}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedUser(null);
-                        setQuery("");
-                      }}
-                      className="text-xs font-semibold text-gray-400 hover:text-red-600"
-                    >
-                      إزالة
-                    </button>
-                  </div>
+                <label className="label-field">ابحث بالاسم أو رقم الجوال بين الحاضرين الآن</label>
+                <input
+                  className="input-field"
+                  placeholder="مثال: أحمد أو 05xxxxxxxx"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoFocus
+                />
+
+                {loadingPresent ? (
+                  <p className="mt-3 text-xs text-gray-400">جارِ التحميل...</p>
+                ) : filteredPresent.length === 0 ? (
+                  <p className="mt-3 text-xs text-gray-400">
+                    لا يوجد حاضرون غير مخصَّصين لمقعد يطابقون البحث — سجّل الحضور أولاً من صفحة تسجيل
+                    الحضور، أو استخدم تبويب "ضيف جديد" لمن وصل للتو.
+                  </p>
                 ) : (
-                  <>
-                    <input
-                      className="input-field"
-                      placeholder="مثال: أحمد أو 05xxxxxxxx"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      autoFocus
-                    />
-                    {searching && <p className="mt-1 text-xs text-gray-400">جارِ البحث...</p>}
-                    {results.length > 0 && (
-                      <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-xl bg-gray-50 p-1.5">
-                        {results.map((u) => (
-                          <button
-                            type="button"
-                            key={u.id}
-                            onClick={() => setSelectedUser(u)}
-                            className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-right text-sm transition hover:bg-white hover:shadow-sm"
-                          >
-                            <span className="font-medium text-gray-800">{u.name}</span>
-                            <span className="text-xs text-gray-400">{u.phone ?? u.email}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {!searching && query.trim().length >= 2 && results.length === 0 && (
-                      <p className="mt-1 text-xs text-gray-400">
-                        لا توجد نتائج مطابقة — يمكنك التبديل إلى "عميل جديد" لإدخال بياناته
-                      </p>
-                    )}
-                  </>
+                  <div className="mt-2 max-h-64 space-y-1.5 overflow-y-auto rounded-xl bg-gray-50 p-1.5">
+                    {filteredPresent.map((b) => {
+                      const { name, phone } = customerLabel(b);
+                      return (
+                        <button
+                          type="button"
+                          key={b.id}
+                          disabled={submitting}
+                          onClick={() => assignExisting(b)}
+                          className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-right text-sm transition hover:bg-white hover:shadow-sm disabled:opacity-50"
+                        >
+                          <div>
+                            <span className="font-medium text-gray-800">{name}</span>
+                            <p className="text-xs text-gray-400">{b.space.name}</p>
+                          </div>
+                          <span className="text-xs text-gray-400">{phone}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
+              <form onSubmit={createAndCheckInGuest} className="space-y-3">
+                <p className="text-xs text-gray-500">
+                  لمن لا يملك حجزاً مسبقاً — سيُنشأ حجز باقة الساعة ويُسجَّل حضوره فوراً.
+                </p>
                 <div>
                   <label className="label-field">اسم العميل</label>
                   <input
@@ -228,27 +227,14 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
                     required
                   />
                 </div>
-              </div>
-            )}
-
-            {studentEligible && effectiveIsStudent && (
-              <p className="rounded-lg bg-rimal-orange-50 px-3 py-2 text-xs text-rimal-orange-600">
-                هذا العميل مسجَّل كطالب — سيُطبَّق خصم {Math.round(Number(space.studentDiscount) * 100)}% تلقائياً
-              </p>
+                <button type="submit" disabled={submitting} className="btn-accent w-full">
+                  {submitting ? "جارِ التسجيل..." : "تسجيل الحضور وتخصيص المقعد"}
+                </button>
+              </form>
             )}
 
             {error && <p className="rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
-
-            {space.hourlyPrice && (
-              <p className="text-center text-xs text-gray-400">
-                تسكين فوري بباقة الساعة — {formatSAR(Number(space.hourlyPrice))}
-              </p>
-            )}
-
-            <button type="submit" disabled={submitting} className="btn-accent w-full">
-              {submitting ? "جارِ التأكيد..." : "تأكيد التخصيص والحجز"}
-            </button>
-          </form>
+          </div>
         )}
       </div>
     </div>

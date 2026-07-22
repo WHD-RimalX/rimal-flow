@@ -68,7 +68,7 @@ const spaces = [
   },
   {
     slug: "innovation-hub",
-    name: "قاعدة الابتكار",
+    name: "قاعة الابتكار",
     nameEn: "Innovation Hub",
     description: "مساحة إبداعية مجهزة لجلسات العصف الذهني والابتكار الجماعي.",
     capacityUnits: 1,

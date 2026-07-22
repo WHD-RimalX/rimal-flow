@@ -3,14 +3,16 @@
 import { useState } from "react";
 import { InteractiveFloorMap } from "@/components/floor-map/InteractiveFloorMap";
 import { QuickBookingPanel } from "@/components/dashboard/QuickBookingPanel";
+import { SeatManagePanel } from "@/components/dashboard/SeatManagePanel";
 import { LiveAttendeesPanel } from "@/components/dashboard/LiveAttendeesPanel";
 import { StatsCards } from "@/components/dashboard/StatsCards";
 import { BookingsTable } from "@/components/dashboard/BookingsTable";
-import type { SpaceDTO } from "@/types";
+import type { BookingDTO, SpaceDTO } from "@/types";
 
 export function OperationsDashboard() {
   const [selectedSpace, setSelectedSpace] = useState<SpaceDTO | null>(null);
   const [selectedSeatIndex, setSelectedSeatIndex] = useState<number>(0);
+  const [managingBooking, setManagingBooking] = useState<BookingDTO | null>(null);
   const [refreshSignal, setRefreshSignal] = useState(0);
 
   return (
@@ -27,6 +29,8 @@ export function OperationsDashboard() {
           setSelectedSpace(space);
           setSelectedSeatIndex(seatIndex);
         }}
+        onManageSeat={setManagingBooking}
+        refreshSignal={refreshSignal}
       />
 
       {selectedSpace && (
@@ -37,6 +41,17 @@ export function OperationsDashboard() {
           onCreated={() => {
             setRefreshSignal((n) => n + 1);
             setSelectedSpace(null);
+          }}
+        />
+      )}
+
+      {managingBooking && (
+        <SeatManagePanel
+          booking={managingBooking}
+          onClose={() => setManagingBooking(null)}
+          onUpdated={() => {
+            setRefreshSignal((n) => n + 1);
+            setManagingBooking(null);
           }}
         />
       )}
