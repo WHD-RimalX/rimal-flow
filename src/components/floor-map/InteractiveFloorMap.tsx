@@ -398,9 +398,9 @@ export function InteractiveFloorMap({ onSelectSpace, onManageSeat, refreshSignal
         <section className="rounded-2xl bg-white/50 p-4 shadow-sm">
           <p className="mb-3 text-[11px] font-bold text-gray-500">الدور الأرضي</p>
           <div className="flex flex-wrap items-stretch justify-between gap-8">
-            {/* يمين: عمود مقاعد المساحة المشتركة (ذهبي)، وفوقها 3 مرافق غير قابلة للحجز */}
+            {/* يمين: عمود مقاعد المساحة المشتركة (ذهبي)، وفوقها 3 مرافق غير قابلة للحجز بالطول (عمودياً) */}
             <div className="flex flex-col items-center gap-3">
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2">
                 {[1, 2, 3].map((i) => (
                   <FacilityBlock key={i} className="h-14 w-14" />
                 ))}
