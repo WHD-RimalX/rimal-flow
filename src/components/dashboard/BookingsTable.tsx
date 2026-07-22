@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { useNow } from "@/lib/hooks/useNow";
-import { computeLiveState, findActiveCheckInLog, formatDuration } from "@/lib/attendance";
+import { computeLiveState, computeRemainingBudgetMs, findActiveCheckInLog, formatDuration } from "@/lib/attendance";
 import {
   BOOKING_STATUS_COLORS,
   BOOKING_STATUS_LABELS,
@@ -43,10 +44,17 @@ function isToday(dateStr: string) {
   );
 }
 
-/** خلية الوقت المتبقي — تُحسب دوماً من expectedEndTime، وتبقى ظاهرة حتى بعد تسجيل الانصراف. */
+/**
+ * خلية الوقت المتبقي — تبقى ظاهرة حتى بعد تسجيل الانصراف، لأن الانصراف لا يعني
+ * انتهاء الحجز (قد يعود العميل لاحقاً ويستكمل رصيده المتبقي من نفس الحجز).
+ */
 function RemainingTimeCell({ booking, now }: { booking: BookingDTO; now: number }) {
   if (booking.status === "CHECKED_OUT") {
-    return <span className="text-xs font-semibold text-gray-400">مكتمل — انصرف</span>;
+    const remainingMs = computeRemainingBudgetMs(booking);
+    if (remainingMs <= 0) {
+      return <span className="text-xs font-semibold text-gray-400">انتهى الوقت بالكامل</span>;
+    }
+    return <span className="text-xs font-semibold text-gray-500">{formatDuration(remainingMs)} متبقٍ</span>;
   }
   if (booking.status === "CANCELLED" || booking.status === "NO_SHOW") {
     return <span className="text-xs text-gray-300">—</span>;
@@ -75,7 +83,14 @@ interface BookingsTableProps {
   refreshSignal?: number;
 }
 
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === "ADMIN" || session?.user?.role === "SUPER_ADMIN";
+
   const [bookings, setBookings] = useState<BookingDTO[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -83,6 +98,7 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
   const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterId>("all");
+  const [selectedDate, setSelectedDate] = useState(todayIso());
   const now = useNow(1000);
 
   const activeFilter = FILTERS.find((f) => f.id === filter) ?? FILTERS[3];
@@ -90,9 +106,8 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
 
   const load = useCallback(() => {
     setLoading(true);
-    const today = new Date().toISOString().slice(0, 10);
     const params = new URLSearchParams({
-      date: today,
+      date: selectedDate,
       page: String(page),
       pageSize: String(PAGE_SIZE),
     });
@@ -104,12 +119,12 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
       })
       .catch(() => setError("تعذّر تحميل الحجوزات"))
       .finally(() => setLoading(false));
-  }, [activeFilter.status, page]);
+  }, [activeFilter.status, page, selectedDate]);
 
-  // إعادة الصفحة إلى 1 عند تغيير الفلتر لتفادي عرض صفحة فارغة بعد تضييق النتائج
+  // إعادة الصفحة إلى 1 عند تغيير الفلتر أو التاريخ لتفادي عرض صفحة فارغة بعد تضييق النتائج
   useEffect(() => {
     setPage(1);
-  }, [filter]);
+  }, [filter, selectedDate]);
 
   useEffect(() => {
     load();
@@ -135,10 +150,26 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
   return (
     <div className="card">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-bold text-gray-700">حجوزات اليوم — لوحة التحكم الزمنية</h2>
-        <button onClick={load} className="text-xs font-semibold text-rimal-purple hover:underline">
-          تحديث
-        </button>
+        <h2 className="text-sm font-bold text-gray-700">الحجوزات — لوحة التحكم الزمنية</h2>
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="rounded-lg border-0 bg-gray-50 px-2 py-1.5 text-xs text-gray-600 shadow-sm"
+          />
+          {selectedDate !== todayIso() && (
+            <button
+              onClick={() => setSelectedDate(todayIso())}
+              className="text-xs font-semibold text-rimal-purple hover:underline"
+            >
+              اليوم
+            </button>
+          )}
+          <button onClick={load} className="text-xs font-semibold text-rimal-purple hover:underline">
+            تحديث
+          </button>
+        </div>
       </div>
 
       <div className="mb-4 flex flex-wrap gap-1 rounded-xl bg-gray-100 p-1">
@@ -213,6 +244,18 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
                             {action.label}
                           </button>
                         ))}
+                        {/* المدير فقط يملك خيار الإلغاء لأي حجز بأي حالة (غير الملغى أصلاً) — صلاحية canCancelBooking مفروضة من السيرفر أيضاً */}
+                        {isAdmin &&
+                          booking.status !== "CANCELLED" &&
+                          !(NEXT_ACTIONS[booking.status] ?? []).some((a) => a.next === "CANCELLED") && (
+                            <button
+                              disabled={updatingId === booking.id}
+                              onClick={() => updateStatus(booking.id, "CANCELLED")}
+                              className="rounded-lg border border-red-200 px-2 py-1 text-[11px] font-semibold text-red-600 transition hover:border-red-400 disabled:opacity-40"
+                            >
+                              إلغاء
+                            </button>
+                          )}
                       </div>
                     </td>
                   </tr>

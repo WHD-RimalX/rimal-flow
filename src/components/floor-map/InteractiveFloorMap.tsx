@@ -507,14 +507,8 @@ export function InteractiveFloorMap({ onSelectSpace, onManageSeat, refreshSignal
               </div>
             </div>
 
-            {/* أقصى اليسار: عناصر هيكلية علوية، ثم 8 مقاعد على شكل حرف L، ثم لاونج VIP، ثم قاعة الابتكار تحتها مباشرة */}
+            {/* أقصى اليسار: 8 مقاعد على شكل حرف L، ثم لاونج VIP، ثم قاعة الابتكار تحتها مباشرة */}
             <div className="flex flex-col items-center gap-4">
-              <div className="flex gap-3">
-                {[1, 2, 3].map((i) => (
-                  <FacilityBlock key={i} className="h-12 w-12" />
-                ))}
-              </div>
-
               <div>
                 <p className="mb-2 text-center text-[11px] text-gray-500">مساحة عمل مشتركة</p>
                 {/* items-end تُحاذي الصف والعمود لنفس الحافة (أقصى اليسار) فيرتسم شكل حرف L/٦ معكوس بدقة */}

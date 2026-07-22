@@ -41,6 +41,60 @@ export function computeLiveState(log: CheckInLogDTO | undefined, now: number): L
   return { phase: "COUNTDOWN", msRemaining, isAlert: msRemaining <= RED_ALERT_THRESHOLD_MS };
 }
 
+/**
+ * شكل أدنى لسجل الحضور تقبله دوال حساب الرصيد — يعمل مع كائنات Prisma الخام
+ * (حيث الحقول الزمنية من نوع Date) وأيضاً مع CheckInLogDTO المُسلسَل من الـ API
+ * (حيث الحقول الزمنية نصوص ISO) دون الحاجة لتحويل يدوي بينهما.
+ */
+export interface CheckInLogLike {
+  action: "CHECK_IN" | "CHECK_OUT";
+  timestamp: string | Date;
+  actualStartTime?: string | Date | null;
+  success: boolean;
+}
+
+/**
+ * إجمالي الوقت الفعلي المُستهلَك عبر كل جلسات الحضور المكتملة (CHECK_IN→CHECK_OUT)
+ * لهذا الحجز — يُستثنى منه أي جلسة حالية لم تُغلَق بعد (يُحسب لحظياً بشكل منفصل).
+ */
+export function computeElapsedActiveMs(checkInLogs: CheckInLogLike[] | undefined): number {
+  if (!checkInLogs || checkInLogs.length === 0) return 0;
+  const sorted = [...checkInLogs]
+    .filter((l) => l.success)
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  let elapsed = 0;
+  let sessionStart: number | null = null;
+  for (const log of sorted) {
+    if (log.action === "CHECK_IN" && log.actualStartTime) {
+      sessionStart = new Date(log.actualStartTime).getTime();
+    } else if (log.action === "CHECK_OUT" && sessionStart !== null) {
+      // Math.max(0, ...) لأن الانصراف قد يحدث أثناء مهلة الوصول (قبل بدء actualStartTime
+      // فعلياً)، فتكون timestamp < sessionStart ونحصل على مدة سالبة تُضخّم الرصيد المتبقي
+      // فوق ما تم دفعه فعلياً لو لم نمنعها.
+      elapsed += Math.max(0, new Date(log.timestamp).getTime() - sessionStart);
+      sessionStart = null;
+    }
+  }
+  return elapsed;
+}
+
+/**
+ * الوقت المتبقي من "رصيد" الحجز (المدة الكاملة المدفوعة ناقص كل الجلسات
+ * المكتملة سابقاً). الانصراف لا يعني انتهاء الحجز — فقط توقّف استهلاك الوقت
+ * مؤقتاً؛ لهذا نستخدم هذه الدالة لبدء/استئناف العدّاد عند كل تسجيل دخول جديد،
+ * ولعرض الوقت المتبقي حتى بعد تسجيل الانصراف بدل اعتباره "مكتملاً".
+ */
+export function computeRemainingBudgetMs(booking: {
+  startTime: string | Date;
+  endTime: string | Date;
+  checkInLogs?: CheckInLogLike[];
+}): number {
+  const totalBudgetMs = new Date(booking.endTime).getTime() - new Date(booking.startTime).getTime();
+  const elapsed = computeElapsedActiveMs(booking.checkInLogs);
+  return Math.max(0, totalBudgetMs - elapsed);
+}
+
 /** يهيّئ فرق وقت (بالميلي ثانية) كنص mm:ss أو hh:mm:ss. */
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));

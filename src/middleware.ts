@@ -3,10 +3,10 @@ import { NextResponse } from "next/server";
 
 /**
  * حماية على مستوى الصفحات: /dashboard/** مقتصرة حصراً على حسابات ADMIN و RECEPTION
- * (وSUPER_ADMIN كدور أعلى من ADMIN بنفس صلاحياته وأكثر). أي عميل عادي (USER) أو
- * زائر غير مسجل يُمنع من الدخول:
- *   - زائر بلا جلسة إطلاقاً → إعادة توجيه لصفحة تسجيل الدخول (لا يوجد شيء يخوّله بعد).
- *   - مستخدم مسجّل بدور USER → صفحة 403 (/unauthorized) لأنه مسجَّل فعلاً لكن دوره لا يخوّله.
+ * (وSUPER_ADMIN كدور أعلى من ADMIN بنفس صلاحياته وأكثر). أي زائر غير مصرَّح له —
+ * سواء بلا جلسة إطلاقاً أو مسجَّل دخوله بدور USER عادي — يُعامَل بنفس الطريقة
+ * تماماً: إعادة توجيه لصفحة 403 (/unauthorized)، دون تمييز أو تلميح بوجود صفحة
+ * دخول، تعزيزاً للأمان (لا داعي لإخبار زائر غير مخوَّل بتفاصيل النظام الداخلية).
  * ملاحظة: هذا يحمي الواجهة فقط — كل API route يتحقق من الصلاحيات بشكل مستقل
  * (انظر src/lib/session.ts و src/lib/rbac.ts) لأننا لا نثق بالـ Client إطلاقاً.
  */
@@ -18,10 +18,8 @@ export default withAuth(
     const isDashboardRoute = req.nextUrl.pathname.startsWith("/dashboard");
 
     if (isDashboardRoute) {
-      if (!token) {
-        return NextResponse.redirect(new URL("/auth/login", req.url));
-      }
-      if (!DASHBOARD_ALLOWED_ROLES.includes(token.role as string)) {
+      const role = token?.role as string | undefined;
+      if (!role || !DASHBOARD_ALLOWED_ROLES.includes(role)) {
         return NextResponse.redirect(new URL("/unauthorized", req.url));
       }
     }

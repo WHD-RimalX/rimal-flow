@@ -80,7 +80,10 @@ export const updateBookingStatusSchema = z
     reason: z.string().trim().max(500).optional(),
     // تعيين/إلغاء تعيين مقعد مرئي على الخريطة — منفصل عن حالة الحجز نفسها.
     // null تعني "أزل التخصيص عن الخريطة" دون التأثير على حالة الحجز.
-    seatIndex: z.union([z.coerce.number().int().min(0), z.null()]).optional(),
+    // ملاحظة مهمة: لا نستخدم z.coerce هنا عمداً — z.coerce.number() يحوّل
+    // Number(null) إلى 0 بدل رفضه، مما كان يمنع إلغاء التخصيص فعلياً (يُسجَّل
+    // seatIndex=0 خطأً بدل إزالته). القيمة تصل دائماً كرقم JS حقيقي أو null.
+    seatIndex: z.union([z.number().int().min(0), z.null()]).optional(),
   })
   .refine((data) => data.status !== undefined || data.seatIndex !== undefined, {
     message: "يجب تمرير status أو seatIndex على الأقل",

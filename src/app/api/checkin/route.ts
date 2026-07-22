@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { checkInRequestSchema } from "@/validations/checkin";
 import { checkInWindow, DUPLICATE_ACTION_COOLDOWN_MINUTES } from "@/lib/pricing";
-import { ARRIVAL_BUFFER_SECONDS } from "@/lib/attendance";
+import { ARRIVAL_BUFFER_SECONDS, computeRemainingBudgetMs } from "@/lib/attendance";
 import { handleApiError } from "@/lib/api-response";
 import { getAuthSession } from "@/lib/session";
 import { differenceInMinutes, addSeconds } from "date-fns";
@@ -13,10 +13,15 @@ import { differenceInMinutes, addSeconds } from "date-fns";
  * القيود المطبّقة (Anti-fraud & Restrictions):
  * 1) التحقق من صحة رمز QR الخاص بالمقر (رمز ثابت للفرع).
  * 2) منع تسجيل الخروج (CHECK_OUT) بدون تسجيل دخول (CHECK_IN) سابق للحجز.
- * 3) منع تكرار نفس الإجراء خلال نافذة تهدئة زمنية (3 دقائق) لمنع الاحتيال/الضغط المتكرر.
- * 4) التحقق من أن الوقت الحالي ضمن النافذة المسموح بها حول موعد الحجز (±30 دقيقة) لتسجيل الحضور.
- * 5) عند نجاح تسجيل الحضور: تبدأ مهلة وصول 30 ثانية (ARRIVAL_BUFFER_SECONDS)، وبعدها
- *    يبدأ المؤقت التنازلي الفعلي لمدة الحجز المدفوعة — يُخزَّنان في CheckInLog.
+ * 3) منع تكرار نفس الإجراء مباشرة تلو الآخر خلال نافذة تهدئة زمنية (3 دقائق) —
+ *    تُقارَن فقط بآخر سجل فعلي بصرف النظر عن نوعه: إن كان آخر سجل هو الإجراء
+ *    المعاكس (مثال: انصرف ثم يريد الدخول مجدداً) لا يوجد أي انتظار إطلاقاً.
+ * 4) نافذة الوصول (±30 دقيقة حول موعد بداية الحجز) تُطبَّق فقط على أول تسجيل
+ *    دخول للحجز؛ أي عودة لاحقة (بعد انصراف سابق) مسموحة في أي وقت طالما لم
+ *    تنتهِ صلاحية الحجز الإجمالية (endTime) ولا يزال هناك رصيد وقت متبقٍ.
+ * 5) الحجز لا "ينتهي" بمجرد الانصراف — الانصراف يوقف استهلاك الوقت مؤقتاً فقط.
+ *    عند كل تسجيل دخول (أول مرة أو استئناف)، يبدأ مهلة وصول 30 ثانية، ثم يُستكمَل
+ *    العدّاد من الرصيد المتبقي الفعلي (المدة الكاملة ناقص كل الجلسات السابقة).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -49,11 +54,12 @@ export async function POST(req: NextRequest) {
     }
 
     const now = new Date();
-    const lastLogOfSameAction = booking.checkInLogs.find((log) => log.action === data.action);
+    // (3) التهدئة تُقارَن فقط بآخر سجل فعلي (بصرف النظر عن نوعه)، وتُطبَّق فقط
+    // إن كان مطابقاً لنفس الإجراء المطلوب الآن — تكرار سريع لنفس الزر تحديداً.
+    const lastLog = booking.checkInLogs[0];
 
-    // (3) نافذة التهدئة الزمنية لمنع تكرار نفس الإجراء (احتيال/ضغط متكرر على الزر)
-    if (lastLogOfSameAction) {
-      const minutesSinceLast = differenceInMinutes(now, lastLogOfSameAction.timestamp);
+    if (lastLog && lastLog.action === data.action) {
+      const minutesSinceLast = differenceInMinutes(now, lastLog.timestamp);
       if (minutesSinceLast < DUPLICATE_ACTION_COOLDOWN_MINUTES) {
         await logFailedAttempt(
           booking.id,
@@ -79,34 +85,42 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "تم تسجيل الحضور مسبقاً لهذا الحجز" }, { status: 409 });
       }
 
-      if (booking.status === "CHECKED_OUT") {
-        await logFailedAttempt(booking.id, data.action, session?.user?.id, "محاولة تسجيل حضور بعد انتهاء الحجز");
-        return NextResponse.json({ error: "تم إغلاق هذا الحجز بالفعل بعد تسجيل الانصراف" }, { status: 409 });
+      const isFirstEverCheckIn = !booking.checkInLogs.some((l) => l.action === "CHECK_IN" && l.success);
+
+      if (isFirstEverCheckIn) {
+        // (4) نافذة الوصول (±30 دقيقة) تُطبَّق فقط على أول تسجيل دخول للحجز
+        const { windowStart, windowEnd } = checkInWindow(booking.startTime);
+        if (now < windowStart || now > windowEnd) {
+          await logFailedAttempt(
+            booking.id,
+            data.action,
+            session?.user?.id,
+            "خارج النافذة الزمنية المسموح بها لتسجيل الحضور"
+          );
+          return NextResponse.json(
+            {
+              error:
+                "لا يمكن تسجيل الحضور الآن — يُسمح بالوصول قبل موعد الحجز أو بعده بـ 30 دقيقة فقط",
+            },
+            { status: 422 }
+          );
+        }
+      } else if (now > booking.endTime) {
+        // عودة بعد انصراف سابق، لكن انتهت صلاحية الحجز الإجمالية
+        await logFailedAttempt(booking.id, data.action, session?.user?.id, "انتهت صلاحية الحجز الزمنية");
+        return NextResponse.json({ error: "انتهت صلاحية هذا الحجز — لا يمكن تسجيل الحضور مجدداً" }, { status: 422 });
       }
 
-      // (4) التحقق من نافذة الوصول المسموح بها حول وقت بداية الحجز (±30 دقيقة)
-      const { windowStart, windowEnd } = checkInWindow(booking.startTime);
-      if (now < windowStart || now > windowEnd) {
-        await logFailedAttempt(
-          booking.id,
-          data.action,
-          session?.user?.id,
-          "خارج النافذة الزمنية المسموح بها لتسجيل الحضور"
-        );
-        return NextResponse.json(
-          {
-            error:
-              "لا يمكن تسجيل الحضور الآن — يُسمح بالوصول قبل موعد الحجز أو بعده بـ 30 دقيقة فقط",
-          },
-          { status: 422 }
-        );
+      // (5) الرصيد المتبقي من وقت الحجز المدفوع (يُستأنف من حيث توقّف عند أي عودة)
+      const remainingBudgetMs = computeRemainingBudgetMs(booking);
+      if (remainingBudgetMs <= 0) {
+        await logFailedAttempt(booking.id, data.action, session?.user?.id, "تم استهلاك كامل وقت الحجز");
+        return NextResponse.json({ error: "تم استهلاك كامل الوقت المدفوع لهذا الحجز" }, { status: 422 });
       }
 
-      // (5) مهلة الوصول (30 ثانية) ثم بدء المؤقت التنازلي الفعلي لمدة الحجز المدفوعة
       const bufferEndsAt = addSeconds(now, ARRIVAL_BUFFER_SECONDS);
-      const bookingDurationMs = booking.endTime.getTime() - booking.startTime.getTime();
       const actualStartTime = bufferEndsAt;
-      const expectedEndTime = new Date(actualStartTime.getTime() + bookingDurationMs);
+      const expectedEndTime = new Date(actualStartTime.getTime() + remainingBudgetMs);
 
       const [, updatedBooking] = await prisma.$transaction([
         prisma.checkInLog.create({
@@ -123,7 +137,7 @@ export async function POST(req: NextRequest) {
         prisma.booking.update({
           where: { id: booking.id },
           data: { status: "CHECKED_IN" },
-          include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 5 } },
+          include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
         }),
       ]);
 
@@ -160,7 +174,7 @@ export async function POST(req: NextRequest) {
       prisma.booking.update({
         where: { id: booking.id },
         data: { status: "CHECKED_OUT" },
-        include: { space: true },
+        include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
       }),
     ]);
 
