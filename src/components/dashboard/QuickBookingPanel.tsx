@@ -63,11 +63,11 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
     setSubmitting(true);
     setError(null);
     try {
-      const res = await apiFetch<{ booking: BookingDTO }>(`/api/bookings/${booking.id}`, {
+      const res = await apiFetch<BookingDTO>(`/api/bookings/${booking.id}`, {
         method: "PATCH",
         body: JSON.stringify({ seatIndex }),
       });
-      setResult(res.booking);
+      setResult(res);
       onCreated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر تخصيص المقعد");
@@ -81,13 +81,13 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
     setSubmitting(true);
     setError(null);
     try {
-      const created = await apiFetch<{ booking: BookingDTO }>("/api/bookings", {
+      const created = await apiFetch<BookingDTO>("/api/bookings", {
         method: "POST",
         body: JSON.stringify({
           spaceId: space.id,
           seatIndex,
           bookingType: "HOURLY",
-          startTime: new Date().toISOString(),
+          startDate: new Date().toISOString(),
           guestName,
           guestPhone,
         }),
@@ -96,7 +96,7 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
       const checkedIn = await apiFetch<{ booking: BookingDTO }>("/api/checkin", {
         method: "POST",
         body: JSON.stringify({
-          bookingCode: created.booking.bookingCode,
+          bookingCode: created.bookingCode,
           action: "CHECK_IN",
           qrCode: VENUE_QR_CODE,
         }),

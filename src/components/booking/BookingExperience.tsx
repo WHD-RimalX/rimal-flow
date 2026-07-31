@@ -42,9 +42,6 @@ export function BookingExperience() {
   const [isStudent, setIsStudent] = useState(false);
   const [studentIdNumber, setStudentIdNumber] = useState("");
   const [startTime, setStartTime] = useState(() => toDatetimeLocalValue(new Date(Date.now() + 15 * 60 * 1000)));
-  const [guestName, setGuestName] = useState("");
-  const [guestPhone, setGuestPhone] = useState("");
-  const [guestEmail, setGuestEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BookingDTO | null>(null);
@@ -86,26 +83,23 @@ export function BookingExperience() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedSpace) return;
+    if (!selectedSpace || !session?.user) return;
     setSubmitting(true);
     setError(null);
     setResult(null);
 
     try {
-      const booking = await apiFetch<{ booking: BookingDTO }>("/api/bookings", {
+      const booking = await apiFetch<BookingDTO>("/api/bookings", {
         method: "POST",
         body: JSON.stringify({
           spaceId: selectedSpace.id,
           bookingType,
-          startTime: new Date(startTime).toISOString(),
+          startDate: new Date(startTime).toISOString(),
           isStudent,
           studentIdNumber: isStudent ? studentIdNumber : undefined,
-          ...(session?.user
-            ? {}
-            : { guestName, guestPhone, guestEmail: guestEmail || undefined }),
         }),
       });
-      setResult(booking.booking);
+      setResult(booking);
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
       else setError("حدث خطأ غير متوقع أثناء إنشاء الحجز");
@@ -242,33 +236,20 @@ export function BookingExperience() {
         )}
 
         {!session?.user && (
-          <>
-            <h3 className="mb-3 mt-6 text-sm font-bold text-gray-700">
-              4. بياناتك (حجز كضيف)
-            </h3>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <input
-                className="input-field"
-                placeholder="الاسم الكامل"
-                value={guestName}
-                onChange={(e) => setGuestName(e.target.value)}
-                required
-              />
-              <input
-                className="input-field"
-                placeholder="رقم الجوال (05xxxxxxxx)"
-                value={guestPhone}
-                onChange={(e) => setGuestPhone(e.target.value)}
-                required
-              />
-              <input
-                className="input-field sm:col-span-2"
-                placeholder="البريد الإلكتروني (اختياري)"
-                value={guestEmail}
-                onChange={(e) => setGuestEmail(e.target.value)}
-              />
+          <div className="mt-6 rounded-xl border border-rimal-purple/20 bg-rimal-purple-50 p-4 text-sm">
+            <p className="font-bold text-gray-800">يلزم تسجيل الدخول لإتمام الحجز</p>
+            <p className="mt-1 text-gray-600">
+              الحجز أصبح متاحاً فقط للمستخدمين المسجّلين — سجّل دخولك أو أنشئ حساباً جديداً لإكمال العملية.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <a href="/auth/login" className="btn-primary px-4 py-2 text-xs">
+                تسجيل الدخول
+              </a>
+              <a href="/auth/register" className="rounded-lg border border-rimal-purple px-4 py-2 text-xs font-semibold text-rimal-purple">
+                إنشاء حساب
+              </a>
             </div>
-          </>
+          </div>
         )}
       </div>
 
@@ -311,8 +292,16 @@ export function BookingExperience() {
             <p className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>
           )}
 
-          <button type="submit" disabled={submitting || !selectedSpace} className="btn-accent mt-5 w-full">
-            {submitting ? "جارِ تأكيد الحجز..." : "تأكيد الحجز"}
+          <button
+            type="submit"
+            disabled={submitting || !selectedSpace || !session?.user}
+            className="btn-accent mt-5 w-full"
+          >
+            {!session?.user
+              ? "سجّل الدخول لتأكيد الحجز"
+              : submitting
+              ? "جارِ تأكيد الحجز..."
+              : "تأكيد الحجز"}
           </button>
         </div>
       </div>

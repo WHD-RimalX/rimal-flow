@@ -5,31 +5,33 @@ import { calculatePrice, computeEndTime } from "@/lib/pricing";
 import { assertNoBookingConflict } from "@/lib/availability";
 import { generateBookingCode } from "@/lib/booking-code";
 import { handleApiError } from "@/lib/api-response";
-import { getAuthSession } from "@/lib/session";
+import { getAuthSession, UnauthorizedError } from "@/lib/session";
 import { isStaff } from "@/lib/rbac";
+import { serializeBooking } from "@/lib/serialize-booking";
 import { endOfDay, startOfDay } from "date-fns";
 
 /**
  * إنشاء حجز جديد.
  * الأمان: السعر يُحسب بالكامل هنا اعتماداً على بيانات المساحة في قاعدة البيانات؛
  * أي حقل سعر قد يُرسله العميل يُتجاهل تماماً (createBookingSchema لا يحتوي عليه أصلاً).
+ *
+ * توافقاً مع عقد التكامل §10: الحجز يتطلب جلسة موثَّقة دائماً (401 لغير المسجّلين
+ * دخولهم بلا استثناء) — لم يعد هناك "حجز ضيف مجهول تماماً" بلا أي جلسة؛ الموظف ما
+ * زال يقدر يحجز لصالح ضيف عبر guestName/guestPhone لكن تحت جلسته هو دائماً.
  */
 export async function POST(req: NextRequest) {
   try {
     const session = await getAuthSession();
+    if (!session?.user) {
+      throw new UnauthorizedError("يرجى تسجيل الدخول أولاً لإتمام الحجز");
+    }
+
     const body = await req.json();
     const data = createBookingSchema.parse(body);
 
-    const staffCaller = Boolean(session?.user && isStaff(session.user.role));
+    const staffCaller = isStaff(session.user.role);
     const bookForExistingCustomer = Boolean(data.customerUserId);
     const bookAsGuest = Boolean(data.guestName && data.guestPhone);
-
-    if (!session?.user && !bookAsGuest) {
-      return NextResponse.json(
-        { error: "يرجى تسجيل الدخول أو إدخال الاسم ورقم الجوال لإتمام الحجز كضيف" },
-        { status: 400 }
-      );
-    }
 
     // لا يجوز لموظف استقبال/مدير إنشاء حجز "مجرّد" منسوب لحسابه هو — يجب دائماً
     // تحديد المستفيد الفعلي: إما عميل مسجَّل بالنظام (customerUserId) أو بيانات ضيف كاملة.
@@ -56,9 +58,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "المساحة المطلوبة غير موجودة أو غير متاحة" }, { status: 404 });
     }
 
-    const endTime = computeEndTime(data.bookingType, data.startTime);
+    const endTime = computeEndTime(data.bookingType, data.startDate);
 
-    await assertNoBookingConflict(space, data.startTime, endTime);
+    await assertNoBookingConflict(space, data.startDate, endTime);
 
     // إن كان هذا تخصيصاً يدوياً لمقعد محدَّد من الخريطة، تأكد أن هذا المقعد بالذات
     // غير مشغول فعلياً بحجز آخر متداخل زمنياً (منفصل عن سعة المساحة الإجمالية أعلاه).
@@ -69,7 +71,7 @@ export async function POST(req: NextRequest) {
           seatIndex: data.seatIndex,
           status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
           startTime: { lt: endTime },
-          endTime: { gt: data.startTime },
+          endTime: { gt: data.startDate },
         },
       });
       if (seatTaken) {
@@ -90,26 +92,29 @@ export async function POST(req: NextRequest) {
     const booking = await prisma.booking.create({
       data: {
         bookingCode: generateBookingCode(),
-        userId: targetCustomerId ?? (bookAsGuest ? null : session?.user?.id ?? null),
+        userId: targetCustomerId ?? (bookAsGuest ? null : session.user.id),
         guestName: targetCustomerId ? null : bookAsGuest ? data.guestName : null,
         guestPhone: targetCustomerId ? null : bookAsGuest ? data.guestPhone : null,
         guestEmail: targetCustomerId ? null : bookAsGuest ? data.guestEmail ?? null : null,
         spaceId: space.id,
         seatIndex: data.seatIndex ?? null,
         bookingType: data.bookingType,
-        startTime: data.startTime,
+        startTime: data.startDate,
         endTime,
         isStudent,
         basePrice,
         discountAmount,
         finalPrice,
         notes: data.notes,
-        status: "CONFIRMED",
+        // يبدأ كل حجز جديد بحالة PENDING (توافقاً مع عقد التكامل §10) ويحتاج
+        // تأكيداً يدوياً صريحاً من موظف عبر PATCH /api/admin/bookings/:id —
+        // لم يعد يُنشأ مؤكَّداً تلقائياً كما كان سابقاً.
+        status: "PENDING",
       },
       include: { space: true },
     });
 
-    return NextResponse.json({ booking }, { status: 201 });
+    return NextResponse.json(serializeBooking(booking), { status: 201 });
   } catch (error) {
     return handleApiError(error);
   }
@@ -177,7 +182,7 @@ export async function GET(req: NextRequest) {
       }),
     ]);
 
-    return NextResponse.json({ bookings, total, page, pageSize });
+    return NextResponse.json({ bookings: bookings.map(serializeBooking), total, page, pageSize });
   } catch (error) {
     return handleApiError(error);
   }

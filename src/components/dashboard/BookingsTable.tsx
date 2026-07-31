@@ -135,7 +135,9 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
   async function updateStatus(bookingId: string, status: BookingStatus) {
     setUpdatingId(bookingId);
     try {
-      await apiFetch(`/api/bookings/${bookingId}`, {
+      // تحويلات الحالة (تأكيد/إلغاء/عدم حضور...) عبر المسار الإداري المخصَّص لها —
+      // PATCH /api/bookings/:id العام أصبح مقتصراً على تخصيص المقعد (seatIndex) فقط.
+      await apiFetch(`/api/admin/bookings/${bookingId}`, {
         method: "PATCH",
         body: JSON.stringify({ status }),
       });

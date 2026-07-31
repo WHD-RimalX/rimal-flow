@@ -189,6 +189,12 @@ model CheckInLog {
   success      Boolean @default(true)
   failureReason String?
 
+  // مفتاح تكرار اختياري (Idempotency Key) — يُستخدَم فقط من مسار التكامل الرسمي
+  // POST /api/bookings/:id/check-in (عقد التكامل §10) لمنع معالجة نفس حدث تسجيل
+  // الحضور مرتين عند إعادة الإرسال (Replay). @unique يسمح بقيم NULL متعددة في
+  // Postgres (لا يفرض التفرّد إلا بين القيم غير الفارغة فعلياً).
+  idempotencyKey String? @unique
+
   @@index([bookingId, action, timestamp])
   @@map("check_in_logs")
 }

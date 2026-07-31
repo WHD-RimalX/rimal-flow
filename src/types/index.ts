@@ -60,6 +60,10 @@ export interface BookingDTO {
   bookingType: BookingType;
   startTime: string;
   endTime: string;
+  /** مرادف startTime بالاسم القياسي حسب عقد التكامل §10 — نفس اللحظة الزمنية بالضبط. */
+  startDate?: string;
+  /** مرادف endTime بالاسم القياسي حسب عقد التكامل §10 — نفس اللحظة الزمنية بالضبط. */
+  endDate?: string;
   isStudent: boolean;
   basePrice: string;
   discountAmount: string;

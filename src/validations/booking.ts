@@ -19,16 +19,41 @@ export const bookingStatusEnum = z.enum([
 
 export type BookingStatusValue = z.infer<typeof bookingStatusEnum>;
 
+/** أعلى عدد ضيوف معقول ضمن حجز واحد — بوابة تحقق أولية قبل أي فحص سعة خاص بالمساحة. */
+const MAX_GUESTS_PER_BOOKING = 50;
+
 /**
  * مخطط إنشاء حجز جديد.
  * ملاحظة أمنية هامة: لا يحتوي هذا المخطط على أي حقل للسعر — الأسعار تُحسب
  * حصراً على السيرفر عبر `calculatePrice()` ولا يُسمح للعميل بإرسالها.
+ *
+ * توافق مع عقد التكامل الرسمي (`API_CONTRACT.md` §10): يقبل `startDate` (الاسم
+ * القياسي الخارجي) مع الإبقاء على قبول `startTime` كمرادف داخلي قديم عندما لا
+ * يُرسَل `startDate` — تفادياً لكسر أي طرف نداء لم يُحدَّث بعد. حقلا `startTime`/
+ * `endTime` بصيغة "HH:MM" (إن أُرسِلا مع `startDate`/`endDate` الكاملين) يُتجاهَلان
+ * عمداً لأن `startDate`/`endDate` يحملان الدقة الزمنية الكاملة أصلاً. `bookingType`
+ * يُقبَل بأي حالة أحرف (hourly/HOURLY) ويُطبَّع داخلياً لأحرف كبيرة.
  */
 export const createBookingSchema = z
-  .object({
+  .preprocess((raw) => {
+    if (typeof raw !== "object" || raw === null) return raw;
+    const normalized: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+    if (normalized.startDate === undefined && normalized.startTime !== undefined) {
+      normalized.startDate = normalized.startTime;
+    }
+    if (typeof normalized.bookingType === "string") {
+      normalized.bookingType = normalized.bookingType.toUpperCase();
+    }
+    return normalized;
+  }, z.object({
     spaceId: z.string().min(1, "يجب اختيار المساحة"),
     bookingType: bookingTypeEnum,
-    startTime: z.coerce.date({ errorMap: () => ({ message: "وقت بداية الحجز غير صالح" }) }),
+    startDate: z.coerce.date({ errorMap: () => ({ message: "وقت بداية الحجز غير صالح" }) }),
+    // اختياري: للتحقق من صحة النطاق الزمني المُرسَل فقط (endDate > startDate) —
+    // لا يُستخدم لحساب مدة الحجز الفعلية أو السعر؛ تلك تبقى محسوبة سيرفرياً من
+    // bookingType حصراً حتى لو أرسل العميل نطاقاً زمنياً مختلفاً (دفاع في العمق).
+    endDate: z.coerce.date({ errorMap: () => ({ message: "وقت نهاية الحجز غير صالح" }) }).optional(),
+    guests: z.coerce.number().int().min(1).max(MAX_GUESTS_PER_BOOKING, "عدد الضيوف أكبر من الحد المسموح").optional(),
     isStudent: z.boolean().default(false),
     studentIdNumber: z.string().trim().max(50).optional(),
     notes: z.string().trim().max(500).optional(),
@@ -49,10 +74,14 @@ export const createBookingSchema = z
       .regex(/^(05\d{8}|\+9665\d{8})$/, "رقم جوال غير صالح — مثال صحيح: 0512345678 أو +966512345678")
       .optional(),
     guestEmail: z.string().trim().email("بريد إلكتروني غير صالح — مثال صحيح: name@example.com").optional(),
-  })
-  .refine((data) => data.startTime.getTime() > Date.now() - 5 * 60 * 1000, {
+  }))
+  .refine((data) => data.startDate.getTime() > Date.now() - 5 * 60 * 1000, {
     message: "لا يمكن إنشاء حجز في وقت ماضٍ",
-    path: ["startTime"],
+    path: ["startDate"],
+  })
+  .refine((data) => !data.endDate || data.endDate.getTime() > data.startDate.getTime(), {
+    message: "وقت النهاية يجب أن يكون بعد وقت البداية",
+    path: ["endDate"],
   })
   .refine(
     (data) =>
@@ -90,6 +119,18 @@ export const updateBookingStatusSchema = z
   });
 
 export type UpdateBookingStatusInput = z.infer<typeof updateBookingStatusSchema>;
+
+/**
+ * تعيين/إلغاء تعيين المقعد المرئي فقط — تُستخدم في `PATCH /api/bookings/:id`
+ * (المسار العام، للموظفين فقط أيضاً) بعد أن أصبحت تحويلات الحالة (status) حصراً
+ * عبر `PATCH /api/admin/bookings/:id` توافقاً مع عقد التكامل §10.
+ */
+export const updateSeatAssignmentSchema = z.object({
+  bookingId: z.string().min(1),
+  seatIndex: z.union([z.number().int().min(0), z.null()]),
+});
+
+export type UpdateSeatAssignmentInput = z.infer<typeof updateSeatAssignmentSchema>;
 
 export const listBookingsQuerySchema = z.object({
   date: z.coerce.date().optional(),
