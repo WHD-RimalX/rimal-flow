@@ -11,6 +11,7 @@ import {
   formatDuration,
   type LiveAttendanceState,
 } from "@/lib/attendance";
+import { SEAT_COUNT_BY_SLUG } from "@/lib/floor-map-config";
 import type { BookingDTO, SpaceDTO } from "@/types";
 
 /**
@@ -321,7 +322,9 @@ export function InteractiveFloorMap({ onSelectSpace, onManageSeat, refreshSignal
   // الفعلية المخزَّنة (capacityUnits=17) لمطابقة المخطط المعماري المرفق بدقة —
   // هذا تمثيل عرضي فقط؛ التحقق من التعارض والسعة الفعلية عند الحجز يبقى من السيرفر
   // حصراً بناءً على capacityUnits الحقيقي، بصرف النظر عن عدد المقاعد المرسومة هنا.
-  const TOTAL_VISUAL_SHARED_SEATS = 25;
+  // القيمة تأتي من مرجع مشترك مع السيرفر (src/lib/floor-map-config.ts) حتى لا يختلف
+  // الرقمان — السيرفر يحتاج نفس العدد بالضبط للتسكين التلقائي عند تسجيل الحضور.
+  const TOTAL_VISUAL_SHARED_SEATS = SEAT_COUNT_BY_SLUG["shared-workspace"];
 
   const sharedSeats: SeatInfo[] = useMemo(() => {
     if (!shared) return [];

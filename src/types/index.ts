@@ -49,6 +49,8 @@ export interface CheckInLogDTO {
 export interface BookingDTO {
   id: string;
   bookingCode: string;
+  /** رمز QR فريد خاص بهذا الحجز — يُعرض للعميل من حسابه ويُمسَح عند الاستقبال. */
+  qrToken: string;
   userId: string | null;
   guestName: string | null;
   guestPhone: string | null;
@@ -92,5 +94,7 @@ export interface DashboardSummaryDTO {
   cancelledOrNoShow: number;
   checkedOutToday: number;
   activeSubscribersCount: number;
+  /** إجمالي إيراد اليوم — يظهر فقط لمن يملك صلاحية canViewReports (ADMIN/SUPER_ADMIN)؛ غائب تماماً عن الاستجابة لغيرهم. */
+  revenueToday?: string;
   generatedAt: string;
 }

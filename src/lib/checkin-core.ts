@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { checkInWindow, DUPLICATE_ACTION_COOLDOWN_MINUTES } from "@/lib/pricing";
-import { ARRIVAL_BUFFER_SECONDS, computeRemainingBudgetMs } from "@/lib/attendance";
+import { ARRIVAL_BUFFER_SECONDS, computeRemainingBudgetMs, isResumableBookingType } from "@/lib/attendance";
 import { serializeBooking } from "@/lib/serialize-booking";
+import { getSeatCountForSpace } from "@/lib/floor-map-config";
 import { differenceInMinutes, addSeconds } from "date-fns";
 import type { Booking, CheckInLog, Space } from "@prisma/client";
 
@@ -87,6 +88,17 @@ export async function runCheckInAction(params: {
       return { status: 409, body: { error: "تم تسجيل الحضور مسبقاً لهذا الحجز" } };
     }
 
+    // الباقات القصيرة (ساعة/4 ساعات/يومي) غير قابلة للاستئناف — بمجرد تسجيل
+    // الانصراف مرة واحدة يُغلَق الحجز نهائياً (يُؤرشَف)، على عكس الباقات الشهرية
+    // التي يمكن العودة إليها عبر جلسات متعددة حتى نفاد الرصيد الكلي.
+    if (booking.status === "CHECKED_OUT" && !isResumableBookingType(booking.bookingType)) {
+      await logFailedAttempt(booking.id, action, performedById, "الحجز مغلق نهائياً بعد الانصراف (باقة قصيرة غير قابلة للاستئناف)");
+      return {
+        status: 422,
+        body: { error: "انتهت هذه الجلسة بتسجيل الانصراف — هذا النوع من الحجوزات لا يُستأنف بعد الانصراف" },
+      };
+    }
+
     const isFirstEverCheckIn = !booking.checkInLogs.some((l) => l.action === "CHECK_IN" && l.success);
 
     if (isFirstEverCheckIn) {
@@ -118,8 +130,37 @@ export async function runCheckInAction(params: {
     const actualStartTime = bufferEndsAt;
     const expectedEndTime = new Date(actualStartTime.getTime() + remainingBudgetMs);
 
-    const [, updatedBooking] = await prisma.$transaction([
-      prisma.checkInLog.create({
+    const updatedBooking = await prisma.$transaction(async (tx) => {
+      // تسكين تلقائي فوري على الخريطة عند تسجيل الحضور — بدون أي تدخل يدوي من
+      // الريسبشن ودون أي تأخير: يتم داخل نفس معاملة تسجيل الحضور مباشرة، فيظهر
+      // المقعد مشغولاً فور نجاح العملية. يُطبَّق فقط على المساحات متعددة المقاعد
+      // (مساحة العمل المشتركة/الثنائية) وفقط إن لم يكن الحجز مخصَّصاً لمقعد أصلاً.
+      let seatIndex = booking.seatIndex;
+      if (seatIndex === null) {
+        const totalSeats = getSeatCountForSpace(booking.space.slug);
+        if (totalSeats !== null) {
+          const takenBookings = await tx.booking.findMany({
+            where: {
+              spaceId: booking.spaceId,
+              id: { not: booking.id },
+              seatIndex: { not: null },
+              status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
+              startTime: { lt: booking.endTime },
+              endTime: { gt: booking.startTime },
+            },
+            select: { seatIndex: true },
+          });
+          const taken = new Set(takenBookings.map((b) => b.seatIndex));
+          for (let i = 0; i < totalSeats; i++) {
+            if (!taken.has(i)) {
+              seatIndex = i;
+              break;
+            }
+          }
+        }
+      }
+
+      await tx.checkInLog.create({
         data: {
           bookingId: booking.id,
           action: "CHECK_IN",
@@ -130,13 +171,14 @@ export async function runCheckInAction(params: {
           expectedEndTime,
           idempotencyKey,
         },
-      }),
-      prisma.booking.update({
+      });
+
+      return tx.booking.update({
         where: { id: booking.id },
-        data: { status: "CHECKED_IN" },
+        data: { status: "CHECKED_IN", ...(seatIndex !== booking.seatIndex ? { seatIndex } : {}) },
         include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
-      }),
-    ]);
+      });
+    });
 
     return {
       status: 200,
@@ -153,13 +195,18 @@ export async function runCheckInAction(params: {
     return { status: 409, body: { error: "لا يمكن تسجيل الانصراف قبل تسجيل الحضور أولاً" } };
   }
 
+  // الباقات القصيرة تُغلَق نهائياً عند الانصراف — يتحرر مقعدها تلقائياً على
+  // الخريطة فوراً بما إنها لن تُستأنف أبداً. الباقات الشهرية تبقي مقعدها محجوزاً
+  // بين الجلسات (الموظف يقدر يحرره يدوياً من لوحة إدارة المقعد إن احتاج).
+  const shouldFreeSeat = !isResumableBookingType(booking.bookingType) && booking.seatIndex !== null;
+
   const [, updatedBooking] = await prisma.$transaction([
     prisma.checkInLog.create({
       data: { bookingId: booking.id, action: "CHECK_OUT", performedById, success: true, idempotencyKey },
     }),
     prisma.booking.update({
       where: { id: booking.id },
-      data: { status: "CHECKED_OUT" },
+      data: { status: "CHECKED_OUT", ...(shouldFreeSeat ? { seatIndex: null } : {}) },
       include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
     }),
   ]);

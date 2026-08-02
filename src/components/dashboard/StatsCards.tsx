@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
+import { formatSAR } from "@/lib/utils";
 import type { DashboardSummaryDTO } from "@/types";
 
 const CARD_CONFIG: {
@@ -43,6 +44,13 @@ export function StatsCards() {
           <p className="mt-1 text-xs text-gray-500">{card.label}</p>
         </div>
       ))}
+      {/* يظهر فقط لمن يملك صلاحية canViewReports — الحقل غائب تماماً عن الاستجابة لغيرهم */}
+      {summary?.revenueToday !== undefined && (
+        <div className="card border-t-4 border-emerald-400 text-emerald-700">
+          <p className="text-2xl font-extrabold">{formatSAR(Number(summary.revenueToday))}</p>
+          <p className="mt-1 text-xs text-gray-500">إيراد اليوم</p>
+        </div>
+      )}
     </div>
   );
 }

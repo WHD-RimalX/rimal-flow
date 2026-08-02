@@ -117,6 +117,11 @@ model Booking {
   id          String @id @default(cuid())
   bookingCode String @unique // كود مختصر قابل للقراءة يُعرض للعميل، مثال: RMX-7F3K2A
 
+  // رمز QR فريد خاص بهذا الحجز تحديداً — يُولَّد تلقائياً عند الإنشاء، يصل إليه
+  // العميل من حسابه، ويُمسَح عند الاستقبال لتسجيل الحضور/الانصراف. يحل محل رمز
+  // QR الثابت الواحد الذي كان يُستخدَم لكل العملاء سابقاً.
+  qrToken String @unique @default(cuid())
+
   userId String?
   user   User?   @relation("UserBookings", fields: [userId], references: [id])
 

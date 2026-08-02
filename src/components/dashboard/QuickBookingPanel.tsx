@@ -12,8 +12,6 @@ interface QuickBookingPanelProps {
   onCreated: () => void;
 }
 
-const VENUE_QR_CODE = process.env.NEXT_PUBLIC_VENUE_QR_CODE ?? "RIMALX-HQ-MAIN-BRANCH-0001";
-
 function customerLabel(b: BookingDTO): { name: string; phone: string | null } {
   return { name: b.user?.name ?? b.guestName ?? "بدون اسم", phone: b.user?.phone ?? b.guestPhone };
 }
@@ -92,13 +90,12 @@ export function QuickBookingPanel({ space, seatIndex, onClose, onCreated }: Quic
           guestPhone,
         }),
       });
-      // تسجيل حضور فعلي فوري (نفس محرك الـ QR) حتى يعمل المؤقّت التنازلي بشكل صحيح
+      // تسجيل حضور فعلي فوري (نفس محرك الحضور) حتى يعمل المؤقّت التنازلي بشكل صحيح
       const checkedIn = await apiFetch<{ booking: BookingDTO }>("/api/checkin", {
         method: "POST",
         body: JSON.stringify({
           bookingCode: created.bookingCode,
           action: "CHECK_IN",
-          qrCode: VENUE_QR_CODE,
         }),
       });
       setResult(checkedIn.booking);

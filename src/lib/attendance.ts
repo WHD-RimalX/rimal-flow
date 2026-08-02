@@ -53,11 +53,27 @@ export interface CheckInLogLike {
   success: boolean;
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+
+/** الباقات القصيرة (ساعة/4 ساعات/يومي) تُغلَق نهائياً بعد استهلاك وقتها أو أول
+ *  انصراف — لا رصيد يُستأنف لاحقاً. الباقات الشهرية على النقيض تُستأنف عبر
+ *  جلسات متعددة (حضور/انصراف) حتى نفاد الرصيد الكلي المدفوع. آمنة للاستخدام
+ *  على العميل (client) والسيرفر معاً — مجرّد مقارنة نصوص، بلا اعتماديات Node. */
+export function isResumableBookingType(bookingType: string): boolean {
+  return bookingType === "MONTHLY_MORNING" || bookingType === "MONTHLY_EVENING";
+}
+
 /**
  * إجمالي الوقت الفعلي المُستهلَك عبر كل جلسات الحضور المكتملة (CHECK_IN→CHECK_OUT)
  * لهذا الحجز — يُستثنى منه أي جلسة حالية لم تُغلَق بعد (يُحسب لحظياً بشكل منفصل).
+ * `roundSessionsToHour`: للباقات الشهرية فقط — كل جلسة مكتملة تُقرَّب لأقرب ساعة
+ * كاملة قبل خصمها من الرصيد الكلي (لأن نظام التسعير بالساعة يفرض حداً أدنى ساعة
+ * واحدة لكل حجز، فالتسوية بعد كل جلسة تتبع نفس المنطق).
  */
-export function computeElapsedActiveMs(checkInLogs: CheckInLogLike[] | undefined): number {
+export function computeElapsedActiveMs(
+  checkInLogs: CheckInLogLike[] | undefined,
+  options?: { roundSessionsToHour?: boolean }
+): number {
   if (!checkInLogs || checkInLogs.length === 0) return 0;
   const sorted = [...checkInLogs]
     .filter((l) => l.success)
@@ -72,7 +88,11 @@ export function computeElapsedActiveMs(checkInLogs: CheckInLogLike[] | undefined
       // Math.max(0, ...) لأن الانصراف قد يحدث أثناء مهلة الوصول (قبل بدء actualStartTime
       // فعلياً)، فتكون timestamp < sessionStart ونحصل على مدة سالبة تُضخّم الرصيد المتبقي
       // فوق ما تم دفعه فعلياً لو لم نمنعها.
-      elapsed += Math.max(0, new Date(log.timestamp).getTime() - sessionStart);
+      let sessionMs = Math.max(0, new Date(log.timestamp).getTime() - sessionStart);
+      if (options?.roundSessionsToHour) {
+        sessionMs = Math.round(sessionMs / HOUR_MS) * HOUR_MS;
+      }
+      elapsed += sessionMs;
       sessionStart = null;
     }
   }
@@ -81,17 +101,20 @@ export function computeElapsedActiveMs(checkInLogs: CheckInLogLike[] | undefined
 
 /**
  * الوقت المتبقي من "رصيد" الحجز (المدة الكاملة المدفوعة ناقص كل الجلسات
- * المكتملة سابقاً). الانصراف لا يعني انتهاء الحجز — فقط توقّف استهلاك الوقت
- * مؤقتاً؛ لهذا نستخدم هذه الدالة لبدء/استئناف العدّاد عند كل تسجيل دخول جديد،
- * ولعرض الوقت المتبقي حتى بعد تسجيل الانصراف بدل اعتباره "مكتملاً".
+ * المكتملة سابقاً). للباقات الشهرية فقط: الانصراف لا يعني انتهاء الحجز — فقط
+ * توقّف استهلاك الوقت مؤقتاً، ويُستأنف الرصيد المتبقي (مقرَّباً لأقرب ساعة لكل
+ * جلسة) عند أي عودة لاحقة. الباقات القصيرة (ساعة/4 ساعات/يومي) ليست قابلة
+ * للاستئناف أصلاً — تُغلَق نهائياً بعد أول انصراف أو بانتهاء وقتها.
  */
 export function computeRemainingBudgetMs(booking: {
   startTime: string | Date;
   endTime: string | Date;
+  bookingType?: string;
   checkInLogs?: CheckInLogLike[];
 }): number {
   const totalBudgetMs = new Date(booking.endTime).getTime() - new Date(booking.startTime).getTime();
-  const elapsed = computeElapsedActiveMs(booking.checkInLogs);
+  const roundSessionsToHour = booking.bookingType === "MONTHLY_MORNING" || booking.bookingType === "MONTHLY_EVENING";
+  const elapsed = computeElapsedActiveMs(booking.checkInLogs, { roundSessionsToHour });
   return Math.max(0, totalBudgetMs - elapsed);
 }
 

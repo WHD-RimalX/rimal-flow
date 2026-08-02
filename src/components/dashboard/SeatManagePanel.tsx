@@ -6,8 +6,6 @@ import { useNow } from "@/lib/hooks/useNow";
 import { computeLiveState, findActiveCheckInLog, formatDuration } from "@/lib/attendance";
 import type { BookingDTO } from "@/types";
 
-const VENUE_QR_CODE = process.env.NEXT_PUBLIC_VENUE_QR_CODE ?? "RIMALX-HQ-MAIN-BRANCH-0001";
-
 interface SeatManagePanelProps {
   booking: BookingDTO;
   onClose: () => void;
@@ -29,7 +27,7 @@ export function SeatManagePanel({ booking, onClose, onUpdated }: SeatManagePanel
     try {
       await apiFetch("/api/checkin", {
         method: "POST",
-        body: JSON.stringify({ bookingCode: booking.bookingCode, action: "CHECK_OUT", qrCode: VENUE_QR_CODE }),
+        body: JSON.stringify({ bookingCode: booking.bookingCode, action: "CHECK_OUT" }),
       });
       onUpdated();
     } catch (err) {

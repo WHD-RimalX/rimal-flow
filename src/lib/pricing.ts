@@ -52,7 +52,8 @@ export function computeEndTime(bookingType: BookingType, startTime: Date): Date 
     case "FOUR_HOUR":
       return addHours(startTime, 4);
     case "DAILY":
-      return addHours(startTime, 24);
+      // الباقة اليومية 10 ساعات ضمن نفس اليوم — وليست 24 ساعة كاملة.
+      return addHours(startTime, 10);
     case "MONTHLY_MORNING":
     case "MONTHLY_EVENING":
       return addDays(startTime, 30);
@@ -60,6 +61,7 @@ export function computeEndTime(bookingType: BookingType, startTime: Date): Date 
       throw new PricingError("نوع حجز غير مدعوم");
   }
 }
+
 
 /**
  * يتحقق من أن سعر الباقة المطلوبة متاح فعلياً لهذه المساحة، ويحسب السعر

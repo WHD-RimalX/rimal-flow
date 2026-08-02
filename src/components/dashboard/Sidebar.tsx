@@ -25,8 +25,9 @@ export function Sidebar() {
     <>
       {/* شريط علوي للجوال فقط */}
       <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-gray-200 bg-white px-3 py-2.5 lg:hidden">
-        <Link href="/" className="shrink-0 text-sm font-extrabold text-rimal-purple">
-          رمال فلو
+        <Link href="/" className="shrink-0">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="رمال X" className="h-7 w-auto" />
         </Link>
         <nav className="flex flex-1 items-center justify-end gap-1 overflow-x-auto">
           {NAV_ITEMS.map((item) => (
@@ -60,8 +61,9 @@ export function Sidebar() {
       {/* الشريط الجانبي للشاشات الكبيرة فقط */}
       <aside className="hidden w-64 shrink-0 flex-col border-l border-gray-200 bg-white lg:flex">
         <div className="border-b border-gray-100 px-5 py-4">
-          <p className="text-sm font-extrabold text-rimal-purple">رمال فلو</p>
-          <p className="text-[11px] text-gray-500">مركز العمليات الذكي</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="رمال X" className="h-8 w-auto" />
+          <p className="mt-2 text-[11px] text-gray-500">مركز العمليات الذكي</p>
         </div>
 
         <nav className="flex-1 space-y-1 p-3">

@@ -1,6 +1,5 @@
 import { Header } from "@/components/ui/Header";
 import { BookingExperience } from "@/components/booking/BookingExperience";
-import { VenueQRDisplay } from "@/components/qr/VenueQRDisplay";
 
 export default function HomePage() {
   return (
@@ -16,11 +15,14 @@ export default function HomePage() {
               احجز مساحتك في <span className="text-rimal-purple">رمال فلو</span> بضغطة واحدة
             </h1>
             <p className="mt-3 max-w-xl text-gray-600">
-              اختر المساحة المناسبة، حدد نوع الحجز، واستفد من خصم الطلاب تلقائياً — الحجز
-              متاح للأعضاء المسجلين وأيضاً كضيف بدون الحاجة لإنشاء حساب.
+              اختر المساحة المناسبة، حدد نوع الحجز، واستفد من خصم الطلاب تلقائياً — سجّل
+              دخولك أو أنشئ حساباً جديداً لإتمام الحجز.
             </p>
           </div>
-          <VenueQRDisplay />
+          <div className="flex items-center justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="رمال X" className="w-full max-w-xs" />
+          </div>
         </section>
 
         <section className="card">

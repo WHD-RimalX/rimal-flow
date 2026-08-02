@@ -2,11 +2,22 @@ import { z } from "zod";
 
 export const checkActionEnum = z.enum(["CHECK_IN", "CHECK_OUT"]);
 
-export const checkInRequestSchema = z.object({
-  bookingCode: z.string().trim().min(1, "كود الحجز مطلوب"),
-  action: checkActionEnum,
-  qrCode: z.string().trim().min(1, "رمز QR غير صالح"),
-});
+/**
+ * كل حجز له رمز QR خاص به (`Booking.qrToken`) يُنشَأ تلقائياً ويصل إليه العميل
+ * من حسابه — يحل محل رمز QR الثابت الواحد الذي كان يُستخدَم لكل العملاء سابقاً.
+ * مسح رمز حجز فعلي يُرسِل `qrToken`؛ إدخال يدوي من الاستقبال (بدون كاميرا) يُرسِل
+ * `bookingCode` مباشرة دون الحاجة لأي QR (الموظف يتحقق من الهوية شخصياً).
+ */
+export const checkInRequestSchema = z
+  .object({
+    qrToken: z.string().trim().min(1).optional(),
+    bookingCode: z.string().trim().min(1).optional(),
+    action: checkActionEnum,
+  })
+  .refine((data) => Boolean(data.qrToken || data.bookingCode), {
+    message: "يجب توفير رمز QR الخاص بالحجز أو كود الحجز يدوياً",
+    path: ["qrToken"],
+  });
 
 export type CheckInRequestInput = z.infer<typeof checkInRequestSchema>;
 

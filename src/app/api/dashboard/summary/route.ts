@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { handleApiError } from "@/lib/api-response";
 import { requireStaffSession } from "@/lib/session";
+import { hasPermission } from "@/lib/rbac";
 import { endOfDay, startOfDay, addMinutes } from "date-fns";
 
 /** إحصائيات لحظية للوحة اليوم (Timeline Command Center). */
 export async function GET() {
   try {
-    await requireStaffSession();
+    const session = await requireStaffSession();
 
     const now = new Date();
     const todayStart = startOfDay(now);
@@ -57,6 +58,20 @@ export async function GET() {
       }),
     ]);
 
+    // إيراد اليوم — لمن يملك صلاحية canViewReports فقط (ADMIN/SUPER_ADMIN)؛ يُحذف
+    // الحقل تماماً من الاستجابة لغيرهم بدل إعادته صفراً، لتفادي أي تسريب بيانات مالية.
+    let revenueToday: string | undefined;
+    if (hasPermission(session.user, "canViewReports")) {
+      const revenue = await prisma.booking.aggregate({
+        where: {
+          startTime: { gte: todayStart, lte: todayEnd },
+          status: { notIn: ["CANCELLED", "NO_SHOW"] },
+        },
+        _sum: { finalPrice: true },
+      });
+      revenueToday = (revenue._sum.finalPrice ?? 0).toString();
+    }
+
     return NextResponse.json({
       totalToday,
       currentlyCheckedIn,
@@ -65,6 +80,7 @@ export async function GET() {
       cancelledOrNoShow,
       checkedOutToday,
       activeSubscribersCount,
+      ...(revenueToday !== undefined ? { revenueToday } : {}),
       generatedAt: now,
     });
   } catch (error) {

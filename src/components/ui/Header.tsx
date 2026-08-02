@@ -11,9 +11,8 @@ export function Header() {
     <header className="sticky top-0 z-40 border-b border-gray-200 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <Link href="/" className="flex items-center gap-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-rimal-purple to-rimal-orange text-sm font-extrabold text-white">
-            X
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="رمال X" className="h-9 w-auto" />
           <div className="leading-tight">
             <p className="text-sm font-extrabold text-rimal-purple">رمال فلو</p>
             <p className="text-[11px] text-gray-500">Rimal Flow — رمال X</p>
@@ -24,13 +23,20 @@ export function Header() {
           <Link href="/" className="text-gray-600 transition hover:text-rimal-purple">
             الحجز
           </Link>
-          <Link href="/checkin" className="text-gray-600 transition hover:text-rimal-purple">
-            تسجيل الحضور
-          </Link>
-          {staff && (
-            <Link href="/dashboard" className="text-gray-600 transition hover:text-rimal-purple">
-              لوحة التحكم
+          {session?.user && !staff && (
+            <Link href="/my-bookings" className="text-gray-600 transition hover:text-rimal-purple">
+              حجوزاتي
             </Link>
+          )}
+          {staff && (
+            <>
+              <Link href="/checkin" className="text-gray-600 transition hover:text-rimal-purple">
+                تسجيل الحضور
+              </Link>
+              <Link href="/dashboard" className="text-gray-600 transition hover:text-rimal-purple">
+                لوحة التحكم
+              </Link>
+            </>
           )}
 
           {session?.user ? (
