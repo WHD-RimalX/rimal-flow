@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { checkInWindow, DUPLICATE_ACTION_COOLDOWN_MINUTES } from "@/lib/pricing";
+import { checkInWindow } from "@/lib/pricing";
 import { ARRIVAL_BUFFER_SECONDS, computeRemainingBudgetMs, isResumableBookingType } from "@/lib/attendance";
 import { serializeBooking } from "@/lib/serialize-booking";
 import { getSeatCountForSpace } from "@/lib/floor-map-config";
-import { differenceInMinutes, addSeconds } from "date-fns";
+import { addSeconds } from "date-fns";
 import type { Booking, CheckInLog, Space } from "@prisma/client";
 
 type BookingWithLogs = Booking & { checkInLogs: CheckInLog[]; space: Space };
@@ -28,8 +28,8 @@ async function logFailedAttempt(
  * المحرك المشترك لتسجيل الحضور/الانصراف — يستخدمه كل من `/api/checkin` (مسار
  * الماسح الذاتي عبر QR للعملاء) و`/api/bookings/:id/check-in` (المسار الرسمي
  * حسب عقد التكامل §10، يدعم `idempotencyKey` لمنع إعادة معالجة نفس الحدث عند
- * إعادة الإرسال). القيود الأمنية (التهدئة/نافذة الوصول/الرصيد المتبقي) واحدة
- * في الحالتين — الفرق الوحيد بينهما هو شكل تحديد الحجز (bookingCode+qrCode
+ * إعادة الإرسال). القيود الأمنية (نافذة الوصول/الرصيد المتبقي/حالة الحجز) واحدة
+ * في الحالتين — الفرق الوحيد بينهما هو شكل تحديد الحجز (bookingCode/qrToken
  * مقابل معرّف الحجز في الـ URL) وحقل idempotencyKey الإضافي.
  */
 export async function runCheckInAction(params: {
@@ -60,27 +60,10 @@ export async function runCheckInAction(params: {
   }
 
   const now = new Date();
-  const lastLog = booking.checkInLogs[0];
 
-  if (lastLog && lastLog.action === action) {
-    const minutesSinceLast = differenceInMinutes(now, lastLog.timestamp);
-    if (minutesSinceLast < DUPLICATE_ACTION_COOLDOWN_MINUTES) {
-      await logFailedAttempt(
-        booking.id,
-        action,
-        performedById,
-        `محاولة تكرار الإجراء خلال أقل من ${DUPLICATE_ACTION_COOLDOWN_MINUTES} دقائق`
-      );
-      return {
-        status: 429,
-        body: {
-          error: `تم تنفيذ هذا الإجراء مؤخراً — يرجى الانتظار ${
-            DUPLICATE_ACTION_COOLDOWN_MINUTES - minutesSinceLast
-          } دقيقة قبل إعادة المحاولة`,
-        },
-      };
-    }
-  }
+  // ملاحظة: أُزيلت مهلة التهدئة (كانت 3 دقائق) بين تكرار نفس الإجراء عمداً —
+  // بطلب صريح لأغراض العرض التوضيحي (السماح بمسح نفس الحساب أكثر من مرة متتالية
+  // بلا انتظار). القيود الأخرى (نافذة الوصول، الرصيد المتبقي، حالة الحجز) تبقى فعّالة.
 
   if (action === "CHECK_IN") {
     if (booking.status === "CHECKED_IN") {

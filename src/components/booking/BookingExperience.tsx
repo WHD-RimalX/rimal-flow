@@ -210,9 +210,11 @@ export function BookingExperience() {
           type="datetime-local"
           className="input-field max-w-xs"
           value={startTime}
+          min={toDatetimeLocalValue(new Date())}
           onChange={(e) => setStartTime(e.target.value)}
           required
         />
+        <p className="mt-1 text-xs text-gray-400">الحجز متاح يومياً من الساعة 9 صباحاً حتى 11 مساءً.</p>
 
         {studentEligible && (
           <label className="mt-5 flex items-center gap-3 rounded-xl border border-rimal-orange/30 bg-rimal-orange-50 p-3 text-sm">

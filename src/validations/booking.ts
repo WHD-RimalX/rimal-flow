@@ -79,6 +79,18 @@ export const createBookingSchema = z
     message: "لا يمكن إنشاء حجز في وقت ماضٍ",
     path: ["startDate"],
   })
+  .refine(
+    (data) => {
+      // الرياض بتوقيت UTC+3 ثابت (بلا توقيت صيفي) — نحسب الساعة المحلية يدوياً
+      // بدل الاعتماد على منطقة زمنية السيرفر (Vercel يشغّل UTC عادة).
+      const riyadhHour = (data.startDate.getUTCHours() + 3) % 24;
+      return riyadhHour >= 9 && riyadhHour < 23;
+    },
+    {
+      message: "الحجز متاح فقط من الساعة 9 صباحاً حتى 11 مساءً بتوقيت الرياض",
+      path: ["startDate"],
+    }
+  )
   .refine((data) => !data.endDate || data.endDate.getTime() > data.startDate.getTime(), {
     message: "وقت النهاية يجب أن يكون بعد وقت البداية",
     path: ["endDate"],

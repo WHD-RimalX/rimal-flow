@@ -24,9 +24,6 @@ export const MONTHLY_EVENING_WINDOW = { startHour: 16, endHour: 23 };
 export const CHECK_IN_GRACE_MINUTES_BEFORE = 30;
 export const CHECK_IN_GRACE_MINUTES_AFTER = 30;
 
-/** حظر تكرار إجراء تسجيل الحضور/الانصراف خلال هذه المدة (مكافحة الاحتيال). */
-export const DUPLICATE_ACTION_COOLDOWN_MINUTES = 3;
-
 function unitPriceFor(space: Space, bookingType: BookingType): number | null {
   switch (bookingType) {
     case "HOURLY":

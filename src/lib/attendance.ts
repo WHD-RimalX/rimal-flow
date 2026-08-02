@@ -104,17 +104,23 @@ export function computeElapsedActiveMs(
  * المكتملة سابقاً). للباقات الشهرية فقط: الانصراف لا يعني انتهاء الحجز — فقط
  * توقّف استهلاك الوقت مؤقتاً، ويُستأنف الرصيد المتبقي (مقرَّباً لأقرب ساعة لكل
  * جلسة) عند أي عودة لاحقة. الباقات القصيرة (ساعة/4 ساعات/يومي) ليست قابلة
- * للاستئناف أصلاً — تُغلَق نهائياً بعد أول انصراف أو بانتهاء وقتها.
+ * للاستئناف أصلاً — بمجرد تسجيل الانصراف مرة واحدة ينتهي الحجز نهائياً والوقت
+ * المتبقي يصبح صفراً فوراً، بصرف النظر عمّا استُهلِك فعلياً من الوقت المدفوع.
  */
 export function computeRemainingBudgetMs(booking: {
   startTime: string | Date;
   endTime: string | Date;
   bookingType?: string;
+  status?: string;
   checkInLogs?: CheckInLogLike[];
 }): number {
+  const resumable = booking.bookingType ? isResumableBookingType(booking.bookingType) : true;
+  if (!resumable && booking.status === "CHECKED_OUT") {
+    return 0;
+  }
+
   const totalBudgetMs = new Date(booking.endTime).getTime() - new Date(booking.startTime).getTime();
-  const roundSessionsToHour = booking.bookingType === "MONTHLY_MORNING" || booking.bookingType === "MONTHLY_EVENING";
-  const elapsed = computeElapsedActiveMs(booking.checkInLogs, { roundSessionsToHour });
+  const elapsed = computeElapsedActiveMs(booking.checkInLogs, { roundSessionsToHour: resumable });
   return Math.max(0, totalBudgetMs - elapsed);
 }
 

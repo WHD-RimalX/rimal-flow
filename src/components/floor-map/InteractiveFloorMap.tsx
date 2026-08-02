@@ -85,7 +85,10 @@ function useFloorMapData(refreshSignal: number) {
     }
 
     load();
-    const interval = setInterval(load, 20_000);
+    // فترة قصيرة عمداً: التسكين التلقائي عند تسجيل الحضور يحدث الآن من صفحة
+    // الماسح المنفصلة (/checkin) — لا رابط مباشر بين الصفحتين، فأقصر تحديث
+    // ممكن هو أقرب حل عملي لإحساس "فوري" على الخريطة بدل بنية Real-time كاملة.
+    const interval = setInterval(load, 3_000);
     return () => {
       mounted = false;
       clearInterval(interval);
