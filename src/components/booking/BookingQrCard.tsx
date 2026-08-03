@@ -10,6 +10,7 @@ import {
   formatDuration,
   isResumableBookingType,
 } from "@/lib/attendance";
+import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
 import type { BookingDTO } from "@/types";
 
@@ -51,7 +52,51 @@ function LiveTimerLine({ booking, now }: { booking: BookingDTO; now: number }) {
   return null;
 }
 
-export function BookingQrCard({ booking }: { booking: BookingDTO }) {
+/** تنبيه + زر تجديد يظهر فقط للباقات القصيرة (غير القابلة للاستئناف) عند دخولها فعلياً في حالة تجاوز الوقت. */
+function OvertimeRenewalBanner({ booking, now, onRenewed }: { booking: BookingDTO; now: number; onRenewed: (b: BookingDTO) => void }) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const resumable = isResumableBookingType(booking.bookingType);
+  if (resumable || booking.status !== "CHECKED_IN") return null;
+
+  const liveState = computeLiveState(findActiveCheckInLog(booking.checkInLogs), now);
+  if (liveState?.phase !== "OVERTIME") return null;
+
+  async function handleRenew() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ booking: BookingDTO; extraHours: number; extraCharge: number }>(
+        `/api/bookings/${booking.id}/extend`,
+        { method: "POST" }
+      );
+      onRenewed(res.booking);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر تجديد الحجز");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-floor-alert/30 bg-red-50 p-3">
+      <p className="text-sm font-bold text-floor-alert">
+        تجاوزت وقت حجزك المحدد بـ {formatDuration(liveState.msOvertime)}
+      </p>
+      <p className="mt-1 text-xs text-gray-600">
+        جدّد حجزك الآن لمتابعة الجلسة — يُحتسب كفاتورة إضافية بالساعة الكاملة (تقريب لأعلى).
+      </p>
+      <button type="button" disabled={submitting} onClick={handleRenew} className="btn-accent mt-2 w-full !py-2 text-sm">
+        {submitting ? "جارِ التجديد..." : "تجديد الحجز"}
+      </button>
+      {error && <p className="mt-2 rounded-lg bg-red-100 p-2 text-xs text-red-700">{error}</p>}
+    </div>
+  );
+}
+
+export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO }) {
+  const [booking, setBooking] = useState(initialBooking);
   const [showQr, setShowQr] = useState(false);
   const now = useNow(1000);
 
@@ -74,6 +119,8 @@ export function BookingQrCard({ booking }: { booking: BookingDTO }) {
       <div className="mt-3 border-t border-gray-100 pt-3">
         <LiveTimerLine booking={booking} now={now} />
       </div>
+
+      <OvertimeRenewalBanner booking={booking} now={now} onRenewed={setBooking} />
 
       {!isClosed && (
         <div className="mt-4">

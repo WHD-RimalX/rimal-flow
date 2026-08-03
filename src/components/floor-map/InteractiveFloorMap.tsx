@@ -109,14 +109,16 @@ function findBookingForSeat(
   seatIndex: number,
   now: number
 ): BookingDTO | undefined {
-  return bookings.find(
-    (b) =>
-      b.spaceId === spaceId &&
-      b.seatIndex === seatIndex &&
-      (b.status === "PENDING" || b.status === "CONFIRMED" || b.status === "CHECKED_IN") &&
-      new Date(b.startTime).getTime() <= now &&
-      new Date(b.endTime).getTime() >= now
-  );
+  return bookings.find((b) => {
+    if (b.spaceId !== spaceId || b.seatIndex !== seatIndex) return false;
+    // حجز حاضر فعلياً (CHECKED_IN) يبقى يُعرَض كمشغول بصرف النظر عن endTime
+    // الاسمي — قد يتجاوز العميل وقته المحدد (Overtime) وهو لا يزال جالساً
+    // فعلياً بالمقعد؛ نهاية الحجز الاسمية لا تعني مغادرته. عدم اعتبار هذا
+    // كان يُخفي المقعد من الخريطة بمجرد انتهاء الوقت الاسمي رغم بقاء العميل.
+    if (b.status === "CHECKED_IN") return true;
+    if (b.status !== "PENDING" && b.status !== "CONFIRMED") return false;
+    return new Date(b.startTime).getTime() <= now && new Date(b.endTime).getTime() >= now;
+  });
 }
 
 function buildSeatInfo(
