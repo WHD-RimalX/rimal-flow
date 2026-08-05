@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "لوحة اليوم", icon: "🗓️" },
   { href: "/dashboard/calendar", label: "التقويم التفاعلي", icon: "📅" },
   { href: "/dashboard/bookings", label: "سجل الحجوزات", icon: "📋" },
+  { href: "/dashboard/subscribers", label: "المشتركون", icon: "👥" },
 ];
 
 function roleLabel(role: string | undefined) {
