@@ -88,11 +88,12 @@ export const createBookingSchema = z
       if (data.bookingType === "MONTHLY_MORNING" || data.bookingType === "MONTHLY_EVENING") return true;
       // الرياض بتوقيت UTC+3 ثابت (بلا توقيت صيفي) — نحسب الساعة المحلية يدوياً
       // بدل الاعتماد على منطقة زمنية السيرفر (Vercel يشغّل UTC عادة).
+      // المكان يُغلق الساعة 10 مساءً — آخر موعد يمكن أن يبدأ به حجز هو 9 مساءً.
       const riyadhHour = (data.startDate.getUTCHours() + 3) % 24;
-      return riyadhHour >= 9 && riyadhHour < 23;
+      return riyadhHour >= 9 && riyadhHour < 22;
     },
     {
-      message: "الحجز متاح فقط من الساعة 9 صباحاً حتى 11 مساءً بتوقيت الرياض",
+      message: "الحجز متاح فقط من الساعة 9 صباحاً حتى 10 مساءً بتوقيت الرياض (آخر موعد للحجز 9 مساءً)",
       path: ["startDate"],
     }
   )

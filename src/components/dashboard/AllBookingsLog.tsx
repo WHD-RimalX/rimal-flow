@@ -13,6 +13,8 @@ import {
 import { BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
 import type { BookingDTO } from "@/types";
 
+const PAGE_SIZE = 10;
+
 const DISPLAY_FILTERS: { id: "ALL" | DisplayStatus; label: string }[] = [
   { id: "ALL", label: "الكل" },
   { id: "UPCOMING", label: "قادم" },
@@ -39,6 +41,7 @@ export function AllBookingsLog() {
   const [filter, setFilter] = useState<"ALL" | DisplayStatus>("ALL");
   const [query, setQuery] = useState("");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const now = useNow(1000);
 
   const load = useCallback(() => {
@@ -81,6 +84,14 @@ export function AllBookingsLog() {
       return name.includes(q) || phone.includes(q) || r.booking.bookingCode.toLowerCase().includes(q);
     })
     .sort((a, b) => new Date(b.booking.startTime).getTime() - new Date(a.booking.startTime).getTime());
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageRows = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, query]);
 
   return (
     <div className="card">
@@ -135,7 +146,7 @@ export function AllBookingsLog() {
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ booking, displayStatus }) => (
+              {pageRows.map(({ booking, displayStatus }) => (
                 <tr key={booking.id} className="border-b border-gray-50 last:border-0">
                   <td className="py-2.5 text-xs text-gray-600">{formatArabicDateTime(booking.startTime)}</td>
                   <td className="py-2.5">
@@ -165,6 +176,33 @@ export function AllBookingsLog() {
               ))}
             </tbody>
           </table>
+
+          <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+            <span>
+              عرض {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, rows.length)} من {rows.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={currentPage <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="rounded-lg border border-gray-200 px-3 py-1.5 font-semibold text-gray-600 transition hover:border-rimal-purple/40 disabled:opacity-40"
+              >
+                السابق
+              </button>
+              <span className="font-semibold text-gray-700">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={currentPage >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                className="rounded-lg border border-gray-200 px-3 py-1.5 font-semibold text-gray-600 transition hover:border-rimal-purple/40 disabled:opacity-40"
+              >
+                التالي
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

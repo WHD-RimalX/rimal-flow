@@ -6,7 +6,9 @@ import { addMinutes } from "date-fns";
 const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 const RIYADH_OFFSET_HOURS = 3;
 const GLOBAL_OPEN_HOUR = 9;
-const GLOBAL_CLOSE_HOUR = 23;
+// المكان يُغلق الساعة 10 مساءً — لذا آخر موعد يُعرَض لبدء حجز جديد هو 9 مساءً
+// (نفس منطق الحلقة أدناه: m < closeMinutes، فتُستبعَد 10 مساءً نفسها تلقائياً).
+const GLOBAL_CLOSE_HOUR = 22;
 
 interface WeeklyDayWindow {
   open: string;

@@ -7,7 +7,8 @@ export function cn(...inputs: ClassValue[]) {
 const arabicNumberFormatter = new Intl.NumberFormat("ar-SA", {
   style: "currency",
   currency: "SAR",
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
 });
 
 export function formatSAR(amount: number): string {

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
+import { QRCodeSVG } from "qrcode.react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_TYPE_LABELS, formatSAR } from "@/lib/utils";
 import { TimeSlotPicker } from "@/components/booking/TimeSlotPicker";
@@ -51,6 +52,24 @@ function riyadhDateToIso(dateStr: string, riyadhHour: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d, riyadhHour - 3, 0, 0)).toISOString();
 }
+
+const arabicDateOnlyFormatter = new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium" });
+
+function formatDateOnly(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return arabicDateOnlyFormatter.format(new Date(y, m - 1, d));
+}
+
+/** يضيف عدد أيام لتاريخ (YYYY-MM-DD) ويعيده بنفس الصيغة — لحساب تاريخ نهاية الاشتراك الشهري تلقائياً. */
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  return toDateInputValue(date);
+}
+
+/** مدة الاشتراك الشهري بالأيام — نفس القيمة المستخدمة في computeEndTime على السيرفر (src/lib/pricing.ts). */
+const MONTHLY_SUBSCRIPTION_DAYS = 30;
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -121,6 +140,7 @@ export function BookingExperience() {
   );
 
   const needsTimeSlot = bookingType === "HOURLY" || bookingType === "FOUR_HOUR";
+  const isMonthly = bookingType === "MONTHLY_MORNING" || bookingType === "MONTHLY_EVENING";
   const studentEligible = selectedSpace ? Number(selectedSpace.studentDiscount) > 0 : false;
 
   const previewBase = selectedSpace && bookingType ? priceForType(selectedSpace, bookingType) : null;
@@ -194,13 +214,20 @@ export function BookingExperience() {
           ✓
         </div>
         <h3 className="text-lg font-bold text-gray-900">تم تأكيد حجزك بنجاح</h3>
-        <p className="mt-1 text-sm text-gray-500">احتفظ بكود الحجز، وستجد رمز QR الخاص به في صفحة حجوزاتي</p>
+        <p className="mt-1 text-sm text-gray-500">احتفظ بكود الحجز ورمز QR — ستجدهما أيضاً في صفحة حجوزاتي</p>
 
         <div className="my-4 rounded-xl bg-rimal-purple-50 py-4">
           <p className="text-xs text-gray-500">كود الحجز</p>
           <p className="font-mono text-2xl font-extrabold tracking-widest text-rimal-purple">
             {result.bookingCode}
           </p>
+        </div>
+
+        <div className="mb-4 flex flex-col items-center gap-2">
+          <div className="rounded-xl border-4 border-rimal-purple/10 bg-white p-3">
+            <QRCodeSVG value={result.qrToken} size={176} fgColor="#4f3569" level="M" />
+          </div>
+          <p className="text-center text-xs text-gray-500">أظهر هذا الرمز للاستقبال عند الوصول أو المغادرة</p>
         </div>
 
         <dl className="grid grid-cols-2 gap-3 text-sm">
@@ -323,7 +350,7 @@ export function BookingExperience() {
               <p className="mb-3 text-xs text-gray-500">{BOOKING_TYPE_HINTS[bookingType]}</p>
             )}
 
-            <label className="label-field">التاريخ</label>
+            <label className="label-field">{isMonthly ? "تاريخ بداية الاشتراك" : "التاريخ"}</label>
             <input
               type="date"
               className="input-field max-w-xs"
@@ -336,6 +363,16 @@ export function BookingExperience() {
               required
             />
 
+            {isMonthly && selectedDate && (
+              <p className="mt-2 text-xs text-gray-500">
+                من <span className="font-semibold text-gray-700">{formatDateOnly(selectedDate)}</span> إلى{" "}
+                <span className="font-semibold text-gray-700">
+                  {formatDateOnly(addDaysToDateStr(selectedDate, MONTHLY_SUBSCRIPTION_DAYS))}
+                </span>{" "}
+                ({MONTHLY_SUBSCRIPTION_DAYS} يوماً)
+              </p>
+            )}
+
             {needsTimeSlot && (
               <div className="mt-3">
                 <label className="label-field">وقت البداية</label>
@@ -345,7 +382,9 @@ export function BookingExperience() {
                   value={selectedSlotIso}
                   onChange={setSelectedSlotIso}
                 />
-                <p className="mt-1 text-xs text-gray-400">الحجز متاح يومياً من الساعة 9 صباحاً حتى 11 مساءً.</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  الحجز متاح يومياً من الساعة 9 صباحاً، وآخر موعد لبدء الحجز الساعة 9 مساءً (يُغلق المكان الساعة 10 مساءً).
+                </p>
               </div>
             )}
 
