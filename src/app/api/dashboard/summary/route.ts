@@ -3,12 +3,14 @@ import { prisma } from "@/lib/prisma";
 import { handleApiError } from "@/lib/api-response";
 import { requireStaffSession } from "@/lib/session";
 import { hasPermission } from "@/lib/rbac";
+import { reconcileExpiredBookings } from "@/lib/booking-lifecycle";
 import { endOfDay, startOfDay, addMinutes } from "date-fns";
 
 /** إحصائيات لحظية للوحة اليوم (Timeline Command Center). */
 export async function GET() {
   try {
     const session = await requireStaffSession();
+    await reconcileExpiredBookings();
 
     const now = new Date();
     const todayStart = startOfDay(now);

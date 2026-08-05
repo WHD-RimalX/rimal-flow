@@ -1,26 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { handleApiError } from "@/lib/api-response";
-import { addHours } from "date-fns";
+import { addMinutes } from "date-fns";
 
 const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+const RIYADH_OFFSET_HOURS = 3;
+const GLOBAL_OPEN_HOUR = 9;
+const GLOBAL_CLOSE_HOUR = 23;
 
 interface WeeklyDayWindow {
   open: string;
   close: string;
 }
 
+/** يحوّل "HH:MM" بتوقيت الرياض المحلي إلى عدد دقائق منذ منتصف الليل بتوقيت UTC. */
+function riyadhTimeToUtcMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h - RIYADH_OFFSET_HOURS) * 60 + m;
+}
+
 /**
  * فتحات الوقت المتاحة لمساحة معينة في يوم محدد — عام (لا يتطلب تسجيل دخول)،
  * مطابقاً لـ `GET /api/spaces` في هذا. مبني على `weeklyAvailability` للمساحة
- * مقسَّماً لفتحات بالساعة، وكل فتحة تُفحَص مقابل الحجوزات الفعلية المتداخلة
- * لتحديد `isAvailable` دون تجاوز `capacityUnits`.
+ * (بتوقيت الرياض المحلي) مقيَّداً أيضاً بساعات العمل العامة 9 صباحاً–11 مساءً
+ * (نفس القيد المطبَّق فعلياً عند إنشاء الحجز في `createBookingSchema`)، مقسَّماً
+ * لفتحات بحجم `granularityMinutes` (افتراضياً 60، يقبل أي قيمة كـ10 لمنتقي وقت
+ * أدق) — كل فتحة تُفحَص مقابل الحجوزات الفعلية المتداخلة لتحديد `isAvailable`.
  */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const spaceId = searchParams.get("spaceId");
     const dateParam = searchParams.get("date");
+    const granularityMinutes = Math.max(5, Number(searchParams.get("granularityMinutes")) || 60);
 
     if (!spaceId || !dateParam) {
       return NextResponse.json({ error: "يجب تحديد spaceId و date" }, { status: 400 });
@@ -44,26 +56,28 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ slots: [] });
     }
 
-    const [openHour] = dayWindow.open.split(":").map(Number);
-    const [closeHour] = dayWindow.close.split(":").map(Number);
+    const openMinutes = Math.max(riyadhTimeToUtcMinutes(dayWindow.open), GLOBAL_OPEN_HOUR * 60 - RIYADH_OFFSET_HOURS * 60);
+    const closeMinutes = Math.min(riyadhTimeToUtcMinutes(dayWindow.close), GLOBAL_CLOSE_HOUR * 60 - RIYADH_OFFSET_HOURS * 60);
+
+    if (openMinutes >= closeMinutes) {
+      return NextResponse.json({ slots: [] });
+    }
 
     const dayBookings = await prisma.booking.findMany({
       where: {
         spaceId: space.id,
         status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
-        startTime: { lt: addHours(date, closeHour) },
-        endTime: { gt: addHours(date, openHour) },
+        startTime: { lt: addMinutes(date, closeMinutes) },
+        endTime: { gt: addMinutes(date, openMinutes) },
       },
       select: { startTime: true, endTime: true },
     });
 
     const slots = [];
-    for (let hour = openHour; hour < closeHour; hour++) {
-      const slotStart = addHours(date, hour);
-      const slotEnd = addHours(date, hour + 1);
-      const overlapping = dayBookings.filter(
-        (b) => b.startTime < slotEnd && b.endTime > slotStart
-      ).length;
+    for (let m = openMinutes; m < closeMinutes; m += granularityMinutes) {
+      const slotStart = addMinutes(date, m);
+      const slotEnd = addMinutes(date, m + granularityMinutes);
+      const overlapping = dayBookings.filter((b) => b.startTime < slotEnd && b.endTime > slotStart).length;
 
       slots.push({
         startTime: slotStart.toISOString(),

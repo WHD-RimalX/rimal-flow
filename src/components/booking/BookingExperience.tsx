@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_TYPE_LABELS, formatSAR } from "@/lib/utils";
+import { TimeSlotPicker } from "@/components/booking/TimeSlotPicker";
 import type { BookingDTO, BookingType, SpaceDTO } from "@/types";
 
 const BOOKING_TYPE_ORDER: BookingType[] = [
@@ -26,11 +27,9 @@ function priceForType(space: SpaceDTO, type: BookingType): number | null {
   return value ? Number(value) : null;
 }
 
-function toDatetimeLocalValue(date: Date) {
+function toDateInputValue(date: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours()
-  )}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 export function BookingExperience() {
@@ -41,7 +40,8 @@ export function BookingExperience() {
   const [bookingType, setBookingType] = useState<BookingType>("HOURLY");
   const [isStudent, setIsStudent] = useState(false);
   const [studentIdNumber, setStudentIdNumber] = useState("");
-  const [startTime, setStartTime] = useState(() => toDatetimeLocalValue(new Date(Date.now() + 15 * 60 * 1000)));
+  const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(new Date()));
+  const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BookingDTO | null>(null);
@@ -72,6 +72,11 @@ export function BookingExperience() {
     }
   }, [availableTypes, bookingType]);
 
+  // إعادة ضبط الفتحة المختارة عند تغيير المساحة أو اليوم — فتحات الأوقات مرتبطة بهما تحديداً
+  useEffect(() => {
+    setSelectedSlotIso(null);
+  }, [selectedSpaceId, selectedDate]);
+
   const studentEligible = selectedSpace ? Number(selectedSpace.studentDiscount) > 0 : false;
 
   const previewBase = selectedSpace ? priceForType(selectedSpace, bookingType) : null;
@@ -83,7 +88,7 @@ export function BookingExperience() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedSpace || !session?.user) return;
+    if (!selectedSpace || !session?.user || !selectedSlotIso) return;
     setSubmitting(true);
     setError(null);
     setResult(null);
@@ -94,7 +99,7 @@ export function BookingExperience() {
         body: JSON.stringify({
           spaceId: selectedSpace.id,
           bookingType,
-          startDate: new Date(startTime).toISOString(),
+          startDate: selectedSlotIso,
           isStudent,
           studentIdNumber: isStudent ? studentIdNumber : undefined,
         }),
@@ -207,14 +212,23 @@ export function BookingExperience() {
 
         <h3 className="mb-3 mt-6 text-sm font-bold text-gray-700">3. وقت البداية</h3>
         <input
-          type="datetime-local"
+          type="date"
           className="input-field max-w-xs"
-          value={startTime}
-          min={toDatetimeLocalValue(new Date())}
-          onChange={(e) => setStartTime(e.target.value)}
+          value={selectedDate}
+          min={toDateInputValue(new Date())}
+          onChange={(e) => setSelectedDate(e.target.value)}
           required
         />
         <p className="mt-1 text-xs text-gray-400">الحجز متاح يومياً من الساعة 9 صباحاً حتى 11 مساءً.</p>
+
+        <div className="mt-3">
+          <TimeSlotPicker
+            spaceId={selectedSpaceId}
+            date={selectedDate}
+            value={selectedSlotIso}
+            onChange={setSelectedSlotIso}
+          />
+        </div>
 
         {studentEligible && (
           <label className="mt-5 flex items-center gap-3 rounded-xl border border-rimal-orange/30 bg-rimal-orange-50 p-3 text-sm">
@@ -296,11 +310,13 @@ export function BookingExperience() {
 
           <button
             type="submit"
-            disabled={submitting || !selectedSpace || !session?.user}
+            disabled={submitting || !selectedSpace || !session?.user || !selectedSlotIso}
             className="btn-accent mt-5 w-full"
           >
             {!session?.user
               ? "سجّل الدخول لتأكيد الحجز"
+              : !selectedSlotIso
+              ? "اختر وقت البداية أولاً"
               : submitting
               ? "جارِ تأكيد الحجز..."
               : "تأكيد الحجز"}

@@ -8,6 +8,7 @@ import { handleApiError } from "@/lib/api-response";
 import { getAuthSession, UnauthorizedError } from "@/lib/session";
 import { isStaff } from "@/lib/rbac";
 import { serializeBooking } from "@/lib/serialize-booking";
+import { reconcileExpiredBookings } from "@/lib/booking-lifecycle";
 import { endOfDay, startOfDay } from "date-fns";
 
 /**
@@ -131,6 +132,8 @@ export async function GET(req: NextRequest) {
     if (!session?.user) {
       return NextResponse.json({ error: "يجب تسجيل الدخول أولاً" }, { status: 401 });
     }
+
+    await reconcileExpiredBookings();
 
     const { searchParams } = new URL(req.url);
     const query = listBookingsQuerySchema.parse({

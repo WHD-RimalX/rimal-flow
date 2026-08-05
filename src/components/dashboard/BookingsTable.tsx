@@ -56,7 +56,10 @@ function RemainingTimeCell({ booking, now }: { booking: BookingDTO; now: number 
     }
     return <span className="text-xs font-semibold text-gray-500">{formatDuration(remainingMs)} متبقٍ</span>;
   }
-  if (booking.status === "CANCELLED" || booking.status === "NO_SHOW") {
+  if (booking.status === "NO_SHOW") {
+    return <span className="text-xs font-semibold text-rose-600">أُلغي الحجز بسبب عدم الحضور</span>;
+  }
+  if (booking.status === "CANCELLED") {
     return <span className="text-xs text-gray-300">—</span>;
   }
 

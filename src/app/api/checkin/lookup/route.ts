@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { handleApiError } from "@/lib/api-response";
 import { requireStaffSession } from "@/lib/session";
 import { serializeBooking } from "@/lib/serialize-booking";
+import { reconcileExpiredBookings } from "@/lib/booking-lifecycle";
 import { z } from "zod";
 
 const lookupSchema = z
@@ -21,6 +22,7 @@ const lookupSchema = z
 export async function POST(req: NextRequest) {
   try {
     await requireStaffSession();
+    await reconcileExpiredBookings();
     const body = await req.json();
     const data = lookupSchema.parse(body);
 

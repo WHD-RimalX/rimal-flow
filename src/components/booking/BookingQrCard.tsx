@@ -49,6 +49,14 @@ function LiveTimerLine({ booking, now }: { booking: BookingDTO; now: number }) {
     return <p className="text-sm text-gray-500">بانتظار تسجيل الحضور عند وصولك</p>;
   }
 
+  if (booking.status === "NO_SHOW") {
+    return <p className="text-sm font-bold text-rose-600">أُلغي الحجز بسبب عدم الحضور</p>;
+  }
+
+  if (booking.status === "CANCELLED") {
+    return <p className="text-sm font-bold text-gray-400">تم إلغاء هذا الحجز</p>;
+  }
+
   return null;
 }
 

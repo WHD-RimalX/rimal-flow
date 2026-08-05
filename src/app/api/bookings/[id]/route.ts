@@ -5,10 +5,12 @@ import { handleApiError } from "@/lib/api-response";
 import { requireSession, requireStaffSession } from "@/lib/session";
 import { ForbiddenError } from "@/lib/rbac";
 import { serializeBooking } from "@/lib/serialize-booking";
+import { reconcileExpiredBookings } from "@/lib/booking-lifecycle";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await requireSession();
+    await reconcileExpiredBookings();
 
     const booking = await prisma.booking.findUnique({
       where: { id: params.id },
