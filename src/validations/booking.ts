@@ -81,6 +81,11 @@ export const createBookingSchema = z
   })
   .refine(
     (data) => {
+      // الاشتراكات الشهرية مستثناة — نافذتها الصباحية تبدأ 8 صباحاً (قبل حد
+      // 9 صباحاً العام)، وهي أصلاً مقيَّدة بنافذتها الخاصة (8ص–4م / 4م–11م)
+      // لا بساعات الدوام العامة المخصَّصة لحجوزات الوصول المباشر (الساعة/4
+      // ساعات/يومي).
+      if (data.bookingType === "MONTHLY_MORNING" || data.bookingType === "MONTHLY_EVENING") return true;
       // الرياض بتوقيت UTC+3 ثابت (بلا توقيت صيفي) — نحسب الساعة المحلية يدوياً
       // بدل الاعتماد على منطقة زمنية السيرفر (Vercel يشغّل UTC عادة).
       const riyadhHour = (data.startDate.getUTCHours() + 3) % 24;
