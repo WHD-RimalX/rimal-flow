@@ -23,7 +23,6 @@ export async function GET() {
       lateArrivals,
       cancelledOrNoShow,
       checkedOutToday,
-      activeSubscribersCount,
     ] = await Promise.all([
       prisma.booking.count({
         where: { startTime: { gte: todayStart, lte: todayEnd } },
@@ -56,13 +55,6 @@ export async function GET() {
       prisma.booking.count({
         where: { status: "CHECKED_OUT", startTime: { gte: todayStart, lte: todayEnd } },
       }),
-      prisma.booking.count({
-        where: {
-          bookingType: { in: ["MONTHLY_MORNING", "MONTHLY_EVENING"] },
-          status: { in: ["CONFIRMED", "CHECKED_IN"] },
-          endTime: { gte: now },
-        },
-      }),
     ]);
 
     // إيراد اليوم — لمن يملك صلاحية canViewReports فقط (ADMIN/SUPER_ADMIN)؛ يُحذف
@@ -86,7 +78,6 @@ export async function GET() {
       lateArrivals,
       cancelledOrNoShow,
       checkedOutToday,
-      activeSubscribersCount,
       ...(revenueToday !== undefined ? { revenueToday } : {}),
       generatedAt: now,
     });

@@ -15,7 +15,8 @@ const CARD_CONFIG: {
   { key: "upcomingSoon", label: "قادمون خلال ساعة", accent: "border-blue-300 text-blue-600" },
   { key: "lateArrivals", label: "متأخرون عن الموعد", accent: "border-amber-300 text-amber-600" },
   { key: "checkedOutToday", label: "غادروا اليوم", accent: "border-gray-300 text-gray-500" },
-  { key: "activeSubscribersCount", label: "مشتركون شهريون نشطون", accent: "border-rimal-orange/30 text-rimal-orange-600" },
+  // "مشتركون شهريون نشطون" أُزيلت من هنا — لوحة اليوم تشغيلية يومية، ومتابعة
+  // الاشتراكات الشهرية أصبح لها مكان مخصَّص أفضل: صفحة /dashboard/subscribers.
 ];
 
 export function StatsCards() {

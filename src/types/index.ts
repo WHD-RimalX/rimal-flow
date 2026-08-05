@@ -93,7 +93,6 @@ export interface DashboardSummaryDTO {
   lateArrivals: number;
   cancelledOrNoShow: number;
   checkedOutToday: number;
-  activeSubscribersCount: number;
   /** إجمالي إيراد اليوم — يظهر فقط لمن يملك صلاحية canViewReports (ADMIN/SUPER_ADMIN)؛ غائب تماماً عن الاستجابة لغيرهم. */
   revenueToday?: string;
   generatedAt: string;
