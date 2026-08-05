@@ -25,13 +25,14 @@ const NEXT_ACTIONS: Partial<Record<BookingStatus, { label: string; next: Booking
   CHECKED_IN: [{ label: "تسجيل انصراف", next: "CHECKED_OUT" }],
 };
 
-type FilterId = "full_day" | "checked_in" | "checked_out" | "all";
+type FilterId = "full_day" | "checked_in" | "checked_out";
 
+// "جميع المسجلين" أُزيلت من هنا — لوحة اليوم مقصورة على تشغيل اليوم الحالي؛
+// عرض كل الحجوزات (بكل الحالات وكل التواريخ) أصبح له صفحة مستقلة: سجل الحجوزات.
 const FILTERS: { id: FilterId; label: string; status?: string }[] = [
   { id: "full_day", label: "حضور اليوم كامل", status: "CHECKED_IN,CHECKED_OUT" },
   { id: "checked_in", label: "الموجودون حالياً", status: "CHECKED_IN" },
   { id: "checked_out", label: "المنصرفون", status: "CHECKED_OUT" },
-  { id: "all", label: "جميع المسجلين", status: undefined },
 ];
 
 function isToday(dateStr: string) {
@@ -100,11 +101,11 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterId>("all");
+  const [filter, setFilter] = useState<FilterId>("full_day");
   const [selectedDate, setSelectedDate] = useState(todayIso());
   const now = useNow(1000);
 
-  const activeFilter = FILTERS.find((f) => f.id === filter) ?? FILTERS[3];
+  const activeFilter = FILTERS.find((f) => f.id === filter) ?? FILTERS[0];
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const load = useCallback(() => {

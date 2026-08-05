@@ -35,10 +35,15 @@ export async function GET() {
           startTime: { gte: now, lte: addMinutes(now, 60) },
         },
       }),
+      // متأخرون عن الموعد: مقصورة على اليوم الحالي فقط (وليست إجمالياً منذ بداية
+      // النظام)، ولا تشمل الاشتراكات الشهرية — "التأخر" هنا مفهوم يومي تشغيلي
+      // (حجز اليوم لم يصل بعد رغم مرور 30 دقيقة)، والاشتراكات الشهرية تُتابَع
+      // من صفحة سجل الحجوزات المنفصلة بدل لوحة اليوم.
       prisma.booking.count({
         where: {
           status: { in: ["PENDING", "CONFIRMED"] },
-          startTime: { lt: addMinutes(now, -30) },
+          bookingType: { notIn: ["MONTHLY_MORNING", "MONTHLY_EVENING"] },
+          startTime: { gte: todayStart, lt: addMinutes(now, -30) },
           endTime: { gte: now },
         },
       }),

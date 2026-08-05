@@ -1,0 +1,172 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
+import { apiFetch, ApiError } from "@/lib/api-client";
+import { useNow } from "@/lib/hooks/useNow";
+import {
+  DISPLAY_STATUS_COLORS,
+  DISPLAY_STATUS_LABELS,
+  deriveDisplayStatus,
+  type DisplayStatus,
+} from "@/lib/attendance";
+import { BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
+import type { BookingDTO } from "@/types";
+
+const DISPLAY_FILTERS: { id: "ALL" | DisplayStatus; label: string }[] = [
+  { id: "ALL", label: "الكل" },
+  { id: "UPCOMING", label: "قادم" },
+  { id: "LATE", label: "متأخر" },
+  { id: "PRESENT", label: "حاضر" },
+  { id: "OVERTIME", label: "تجاوز الوقت" },
+  { id: "CHECKED_OUT", label: "منصرف" },
+  { id: "NO_SHOW", label: "لم يحضر" },
+  { id: "CANCELLED", label: "ملغي" },
+];
+
+/**
+ * سجل شامل لكل الحجوزات (بما فيها الاشتراكات الشهرية والحجوزات الملغاة/المنتهية) —
+ * بلا تقييد بيوم واحد كلوحة اليوم التشغيلية؛ التصنيف هنا حسب حالة معروضة محسوبة
+ * (قادم/متأخر/حاضر/تجاوز الوقت/منصرف/لم يحضر/ملغي) بدل حالة قاعدة البيانات الخام.
+ */
+export function AllBookingsLog() {
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === "ADMIN" || session?.user?.role === "SUPER_ADMIN";
+
+  const [bookings, setBookings] = useState<BookingDTO[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"ALL" | DisplayStatus>("ALL");
+  const [query, setQuery] = useState("");
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const now = useNow(1000);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    apiFetch<{ bookings: BookingDTO[] }>("/api/bookings")
+      .then((data) => setBookings(data.bookings))
+      .catch(() => setError("تعذّر تحميل سجل الحجوزات"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => clearInterval(interval);
+  }, [load]);
+
+  async function cancelBooking(bookingId: string) {
+    setUpdatingId(bookingId);
+    try {
+      await apiFetch(`/api/admin/bookings/${bookingId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "CANCELLED" }),
+      });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر إلغاء الحجز");
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  const rows = bookings
+    .map((b) => ({ booking: b, displayStatus: deriveDisplayStatus(b, now) }))
+    .filter((r) => filter === "ALL" || r.displayStatus === filter)
+    .filter((r) => {
+      if (!query.trim()) return true;
+      const q = query.trim().toLowerCase();
+      const name = (r.booking.user?.name ?? r.booking.guestName ?? "").toLowerCase();
+      const phone = (r.booking.user?.phone ?? r.booking.guestPhone ?? "").toLowerCase();
+      return name.includes(q) || phone.includes(q) || r.booking.bookingCode.toLowerCase().includes(q);
+    })
+    .sort((a, b) => new Date(b.booking.startTime).getTime() - new Date(a.booking.startTime).getTime());
+
+  return (
+    <div className="card">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-bold text-gray-700">سجل جميع الحجوزات</h2>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            placeholder="بحث بالاسم/الجوال/كود الحجز"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="rounded-lg border-0 bg-gray-50 px-3 py-1.5 text-xs text-gray-600 shadow-sm"
+          />
+          <button onClick={load} className="text-xs font-semibold text-rimal-purple hover:underline">
+            تحديث
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-4 flex flex-wrap gap-1 rounded-xl bg-gray-100 p-1">
+        {DISPLAY_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              filter === f.id ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {error && <p className="mb-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
+
+      {loading ? (
+        <p className="text-sm text-gray-500">جارِ التحميل...</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-gray-500">لا توجد حجوزات مطابقة</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-right text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 text-xs text-gray-400">
+                <th className="pb-2 font-medium">الوقت</th>
+                <th className="pb-2 font-medium">العميل</th>
+                <th className="pb-2 font-medium">المساحة</th>
+                <th className="pb-2 font-medium">الباقة</th>
+                <th className="pb-2 font-medium">السعر</th>
+                <th className="pb-2 font-medium">الحالة</th>
+                <th className="pb-2 font-medium">إجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ booking, displayStatus }) => (
+                <tr key={booking.id} className="border-b border-gray-50 last:border-0">
+                  <td className="py-2.5 text-xs text-gray-600">{formatArabicDateTime(booking.startTime)}</td>
+                  <td className="py-2.5">
+                    {booking.user?.name ?? booking.guestName}
+                    <p className="text-xs text-gray-400">{booking.user?.phone ?? booking.guestPhone}</p>
+                  </td>
+                  <td className="py-2.5">{booking.space.name}</td>
+                  <td className="py-2.5 text-xs text-gray-600">{BOOKING_TYPE_LABELS[booking.bookingType]}</td>
+                  <td className="py-2.5 font-semibold">{formatSAR(Number(booking.finalPrice))}</td>
+                  <td className="py-2.5">
+                    <span className={`badge ${DISPLAY_STATUS_COLORS[displayStatus]}`}>
+                      {DISPLAY_STATUS_LABELS[displayStatus]}
+                    </span>
+                  </td>
+                  <td className="py-2.5">
+                    {isAdmin && booking.status !== "CANCELLED" && (
+                      <button
+                        disabled={updatingId === booking.id}
+                        onClick={() => cancelBooking(booking.id)}
+                        className="rounded-lg border border-red-200 px-2 py-1 text-[11px] font-semibold text-red-600 transition hover:border-red-400 disabled:opacity-40"
+                      >
+                        إلغاء
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
