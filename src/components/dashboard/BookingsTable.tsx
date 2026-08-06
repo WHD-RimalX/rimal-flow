@@ -17,7 +17,11 @@ import type { BookingDTO, BookingStatus } from "@/types";
 const PAGE_SIZE = 10;
 
 const NEXT_ACTIONS: Partial<Record<BookingStatus, { label: string; next: BookingStatus }[]>> = {
-  PENDING: [{ label: "تأكيد", next: "CONFIRMED" }, { label: "إلغاء", next: "CANCELLED" }],
+  PENDING: [
+    { label: "تأكيد", next: "CONFIRMED" },
+    { label: "رفض", next: "REJECTED" },
+    { label: "إلغاء", next: "CANCELLED" },
+  ],
   CONFIRMED: [
     { label: "تسجيل عدم حضور", next: "NO_SHOW" },
     { label: "إلغاء", next: "CANCELLED" },

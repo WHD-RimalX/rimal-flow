@@ -18,17 +18,20 @@ type CheckAction = "CHECK_IN" | "CHECK_OUT";
  * كل حجز له رمز خاص به يصل إليه العميل من حسابه. عند تعطّل الكاميرا يمكن
  * للاستقبال إدخال كود الحجز يدوياً بعد التحقق من الهوية شخصياً.
  */
+type ManualMode = "camera" | "code" | "phone";
+
 function ScanStep({
   onLookup,
   loading,
   error,
 }: {
-  onLookup: (params: { qrToken?: string; bookingCode?: string }) => void;
+  onLookup: (params: { qrToken?: string; bookingCode?: string; phone?: string }) => void;
   loading: boolean;
   error: string | null;
 }) {
   const [manualCode, setManualCode] = useState("");
-  const [useCamera, setUseCamera] = useState(true);
+  const [phone, setPhone] = useState("");
+  const [mode, setMode] = useState<ManualMode>("camera");
 
   return (
     <div className="card mx-auto max-w-md">
@@ -37,18 +40,27 @@ function ScanStep({
         وجّه الكاميرا نحو رمز QR الظاهر في حساب العميل — الرمز خاص بحجزه هو تحديداً وينتهي بانتهاء حجزه.
       </p>
 
-      {useCamera ? (
+      {mode === "camera" && (
         <div className="mt-4">
           <QrScanner onScan={(value) => onLookup({ qrToken: value })} />
           <button
             type="button"
-            onClick={() => setUseCamera(false)}
+            onClick={() => setMode("code")}
             className="mt-3 w-full text-center text-xs font-semibold text-gray-400 hover:text-rimal-purple"
           >
             لا تعمل الكاميرا؟ إدخال كود الحجز يدوياً
           </button>
+          <button
+            type="button"
+            onClick={() => setMode("phone")}
+            className="mt-1 w-full text-center text-xs font-semibold text-gray-400 hover:text-rimal-purple"
+          >
+            ضيف بلا تطبيق؟ بحث برقم الجوال
+          </button>
         </div>
-      ) : (
+      )}
+
+      {mode === "code" && (
         <div className="mt-4 space-y-3">
           <input
             className="input-field text-center font-mono text-xs uppercase"
@@ -66,7 +78,36 @@ function ScanStep({
           </button>
           <button
             type="button"
-            onClick={() => setUseCamera(true)}
+            onClick={() => setMode("camera")}
+            className="w-full text-center text-xs font-semibold text-gray-400 hover:text-rimal-purple"
+          >
+            الرجوع لمسح الكاميرا
+          </button>
+        </div>
+      )}
+
+      {mode === "phone" && (
+        <div className="mt-4 space-y-3">
+          <p className="text-xs text-gray-500">
+            لضيوف walk-in بلا حجز عبر التطبيق ولا رمز QR — يُعثَر على أنسب حجز نشط بهذا الرقم.
+          </p>
+          <input
+            className="input-field text-center text-sm"
+            placeholder="0512345678"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+          <button
+            type="button"
+            disabled={!phone.trim() || loading}
+            onClick={() => onLookup({ phone: phone.trim() })}
+            className="btn-secondary w-full"
+          >
+            {loading ? "جارِ البحث..." : "بحث"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("camera")}
             className="w-full text-center text-xs font-semibold text-gray-400 hover:text-rimal-purple"
           >
             الرجوع لمسح الكاميرا
@@ -86,7 +127,7 @@ export function CheckInPanel() {
   const [pendingAction, setPendingAction] = useState<CheckAction | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  async function handleLookup(params: { qrToken?: string; bookingCode?: string }) {
+  async function handleLookup(params: { qrToken?: string; bookingCode?: string; phone?: string }) {
     setLookupLoading(true);
     setLookupError(null);
     try {

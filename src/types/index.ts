@@ -16,7 +16,8 @@ export type BookingStatus =
   | "CHECKED_IN"
   | "CHECKED_OUT"
   | "CANCELLED"
-  | "NO_SHOW";
+  | "NO_SHOW"
+  | "REJECTED";
 
 export interface SpaceDTO {
   id: string;

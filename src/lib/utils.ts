@@ -39,6 +39,7 @@ export const BOOKING_STATUS_LABELS: Record<string, string> = {
   CHECKED_OUT: "غادر",
   CANCELLED: "ملغى",
   NO_SHOW: "لم يحضر",
+  REJECTED: "مرفوض",
 };
 
 export const BOOKING_STATUS_COLORS: Record<string, string> = {
@@ -48,4 +49,5 @@ export const BOOKING_STATUS_COLORS: Record<string, string> = {
   CHECKED_OUT: "bg-gray-100 text-gray-600 border-gray-300",
   CANCELLED: "bg-red-100 text-red-700 border-red-300",
   NO_SHOW: "bg-rose-100 text-rose-800 border-rose-300",
+  REJECTED: "bg-red-200 text-red-800 border-red-400",
 };

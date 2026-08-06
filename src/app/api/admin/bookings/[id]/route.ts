@@ -22,7 +22,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ error: "الحجز غير موجود" }, { status: 404 });
     }
 
-    if (data.status === "CANCELLED") {
+    if (data.status === "CANCELLED" || data.status === "REJECTED") {
       assertPermission(session.user, "canCancelBooking");
     }
 

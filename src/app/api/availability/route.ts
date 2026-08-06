@@ -55,14 +55,14 @@ export async function GET(req: NextRequest) {
     const dayWindow = weekly[dayKey];
 
     if (!dayWindow) {
-      return NextResponse.json({ slots: [] });
+      return NextResponse.json({ slots: [], closedReason: "المساحة مغلقة هذا اليوم" });
     }
 
     const openMinutes = Math.max(riyadhTimeToUtcMinutes(dayWindow.open), GLOBAL_OPEN_HOUR * 60 - RIYADH_OFFSET_HOURS * 60);
     const closeMinutes = Math.min(riyadhTimeToUtcMinutes(dayWindow.close), GLOBAL_CLOSE_HOUR * 60 - RIYADH_OFFSET_HOURS * 60);
 
     if (openMinutes >= closeMinutes) {
-      return NextResponse.json({ slots: [] });
+      return NextResponse.json({ slots: [], closedReason: "المساحة مغلقة هذا اليوم" });
     }
 
     const dayBookings = await prisma.booking.findMany({
@@ -75,16 +75,22 @@ export async function GET(req: NextRequest) {
       select: { startTime: true, endTime: true },
     });
 
+    const now = Date.now();
     const slots = [];
     for (let m = openMinutes; m < closeMinutes; m += granularityMinutes) {
       const slotStart = addMinutes(date, m);
       const slotEnd = addMinutes(date, m + granularityMinutes);
+      const isPast = slotStart.getTime() < now;
       const overlapping = dayBookings.filter((b) => b.startTime < slotEnd && b.endTime > slotStart).length;
+      const isBooked = overlapping >= space.capacityUnits;
 
       slots.push({
         startTime: slotStart.toISOString(),
         endTime: slotEnd.toISOString(),
-        isAvailable: overlapping < space.capacityUnits,
+        isAvailable: !isPast && !isBooked,
+        // سبب واضح لعدم التوفر — يُعرض للعميل بدل رفض صامت: "PAST" (الوقت فات
+        // لليوم نفسه) أو "BOOKED" (محجوز بالكامل)؛ null يعني الفتحة متاحة فعلاً.
+        reason: isPast ? "PAST" : isBooked ? "BOOKED" : null,
       });
     }
 

@@ -15,6 +15,7 @@ export const bookingStatusEnum = z.enum([
   "CHECKED_OUT",
   "CANCELLED",
   "NO_SHOW",
+  "REJECTED",
 ]);
 
 export type BookingStatusValue = z.infer<typeof bookingStatusEnum>;
@@ -49,6 +50,9 @@ export const createBookingSchema = z
     spaceId: z.string().min(1, "يجب اختيار المساحة"),
     bookingType: bookingTypeEnum,
     startDate: z.coerce.date({ errorMap: () => ({ message: "وقت بداية الحجز غير صالح" }) }),
+    // عدد الساعات المطلوبة — يُستخدَم فقط مع bookingType=HOURLY (1-3 ساعات)؛
+    // يُتجاهَل تماماً لبقية الأنواع التي لها مدة ثابتة محسوبة من نوع الباقة نفسه.
+    durationHours: z.coerce.number().int().min(1).max(3).optional(),
     // اختياري: للتحقق من صحة النطاق الزمني المُرسَل فقط (endDate > startDate) —
     // لا يُستخدم لحساب مدة الحجز الفعلية أو السعر؛ تلك تبقى محسوبة سيرفرياً من
     // bookingType حصراً حتى لو أرسل العميل نطاقاً زمنياً مختلفاً (دفاع في العمق).

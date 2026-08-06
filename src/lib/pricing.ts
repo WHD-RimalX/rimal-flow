@@ -41,11 +41,11 @@ function unitPriceFor(space: Space, bookingType: BookingType): number | null {
   }
 }
 
-/** يحسب وقت الانتهاء بناءً على نوع الحجز ووقت البدء. */
-export function computeEndTime(bookingType: BookingType, startTime: Date): Date {
+/** يحسب وقت الانتهاء بناءً على نوع الحجز ووقت البدء. `durationHours` (1-3) يُستخدَم فقط مع HOURLY. */
+export function computeEndTime(bookingType: BookingType, startTime: Date, durationHours?: number): Date {
   switch (bookingType) {
     case "HOURLY":
-      return addHours(startTime, 1);
+      return addHours(startTime, durationHours ?? 1);
     case "FOUR_HOUR":
       return addHours(startTime, 4);
     case "DAILY":
@@ -67,16 +67,20 @@ export function computeEndTime(bookingType: BookingType, startTime: Date): Date 
 export function calculatePrice(
   space: Space,
   bookingType: BookingType,
-  isStudent: boolean
+  isStudent: boolean,
+  durationHours?: number
 ): PriceBreakdown {
   if (!space.isActive) {
     throw new PricingError("هذه المساحة غير متاحة للحجز حالياً");
   }
 
-  const basePrice = unitPriceFor(space, bookingType);
-  if (basePrice === null) {
+  const unitPrice = unitPriceFor(space, bookingType);
+  if (unitPrice === null) {
     throw new PricingError("باقة السعر المطلوبة غير متاحة لهذه المساحة");
   }
+  // مضاعفة السعر بعدد الساعات تنطبق فقط على باقة الساعة (HOURLY 1-3 ساعات)؛
+  // بقية الباقات لها سعر ثابت بصرف النظر عن durationHours.
+  const basePrice = bookingType === "HOURLY" ? unitPrice * (durationHours ?? 1) : unitPrice;
 
   const studentDiscountRate = isStudent ? Number(space.studentDiscount) : 0;
   const discountAmount = Math.round(basePrice * studentDiscountRate * 100) / 100;

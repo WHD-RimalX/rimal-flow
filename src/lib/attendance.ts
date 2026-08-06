@@ -140,57 +140,59 @@ export function customerNameOf(booking: BookingDTO): string {
   return booking.user?.name ?? booking.guestName ?? "عميل";
 }
 
-/** نفس نافذة السماح المستخدمة في محرك تسجيل الحضور (src/lib/pricing.ts) — منسوخة
- *  هنا بدل الاستيراد لتبقى هذه الدالة آمنة للعميل (attendance.ts خالٍ من أي
- *  اعتماديات خادم فقط، بخلاف pricing.ts). */
-const LATE_GRACE_MINUTES = 30;
-
 export type DisplayStatus =
-  | "UPCOMING"
-  | "LATE"
-  | "PRESENT"
-  | "OVERTIME"
-  | "CHECKED_OUT"
-  | "NO_SHOW"
-  | "CANCELLED";
+  | "PENDING"
+  | "CONFIRMED"
+  | "ACTIVE_NOW"
+  | "COMPLETED"
+  | "MISSED"
+  | "CANCELLED"
+  | "REJECTED";
 
 /**
- * حالة معروضة موحَّدة لسجل الحجوزات — تدمج حالة قاعدة البيانات الخام مع حالات
- * محسوبة لحظياً (متأخر/تجاوز الوقت) لا تُخزَّن كحقل status منفصل. تُستخدم في
- * صفحة سجل جميع الحجوزات لتصنيف/تصفية الصفوف بشكل مفهوم تشغيلياً.
+ * حالة معروضة موحَّدة لسجل الحجوزات — تُقابل حالة قاعدة البيانات الخام مباشرةً
+ * (بلا حسابات زمنية إضافية مثل "متأخر" سابقاً)، باستثناء CHECKED_IN التي تُعرض
+ * دائماً كـ"نشط الآن" بصرف النظر عن تجاوز الوقت من عدمه. تُستخدم في صفحة سجل
+ * جميع الحجوزات لتصنيف/تصفية الصفوف.
  */
 export function deriveDisplayStatus(
   booking: { status: string; startTime: string | Date; checkInLogs?: CheckInLogDTO[] },
   now: number
 ): DisplayStatus {
-  if (booking.status === "CANCELLED") return "CANCELLED";
-  if (booking.status === "NO_SHOW") return "NO_SHOW";
-  if (booking.status === "CHECKED_OUT") return "CHECKED_OUT";
-  if (booking.status === "CHECKED_IN") {
-    const liveState = computeLiveState(findActiveCheckInLog(booking.checkInLogs), now);
-    return liveState?.phase === "OVERTIME" ? "OVERTIME" : "PRESENT";
+  switch (booking.status) {
+    case "REJECTED":
+      return "REJECTED";
+    case "CANCELLED":
+      return "CANCELLED";
+    case "NO_SHOW":
+      return "MISSED";
+    case "CHECKED_OUT":
+      return "COMPLETED";
+    case "CHECKED_IN":
+      return "ACTIVE_NOW";
+    case "CONFIRMED":
+      return "CONFIRMED";
+    default:
+      return "PENDING";
   }
-  // PENDING / CONFIRMED
-  const graceMs = LATE_GRACE_MINUTES * 60 * 1000;
-  return now > new Date(booking.startTime).getTime() + graceMs ? "LATE" : "UPCOMING";
 }
 
 export const DISPLAY_STATUS_LABELS: Record<DisplayStatus, string> = {
-  UPCOMING: "قادم",
-  LATE: "متأخر",
-  PRESENT: "حاضر",
-  OVERTIME: "تجاوز الوقت",
-  CHECKED_OUT: "منصرف",
-  NO_SHOW: "لم يحضر",
+  PENDING: "قيد الانتظار",
+  CONFIRMED: "مؤكد",
+  ACTIVE_NOW: "نشط الآن",
+  COMPLETED: "مكتمل",
+  MISSED: "فائت",
   CANCELLED: "ملغي",
+  REJECTED: "مرفوض",
 };
 
 export const DISPLAY_STATUS_COLORS: Record<DisplayStatus, string> = {
-  UPCOMING: "bg-blue-100 text-blue-800 border-blue-300",
-  LATE: "bg-amber-100 text-amber-800 border-amber-300",
-  PRESENT: "bg-emerald-100 text-emerald-800 border-emerald-300",
-  OVERTIME: "bg-red-100 text-red-800 border-red-300",
-  CHECKED_OUT: "bg-gray-100 text-gray-600 border-gray-300",
-  NO_SHOW: "bg-rose-100 text-rose-800 border-rose-300",
+  PENDING: "bg-amber-100 text-amber-800 border-amber-300",
+  CONFIRMED: "bg-blue-100 text-blue-800 border-blue-300",
+  ACTIVE_NOW: "bg-emerald-100 text-emerald-800 border-emerald-300",
+  COMPLETED: "bg-gray-100 text-gray-600 border-gray-300",
+  MISSED: "bg-rose-100 text-rose-800 border-rose-300",
   CANCELLED: "bg-gray-100 text-gray-400 border-gray-200",
+  REJECTED: "bg-red-200 text-red-800 border-red-400",
 };

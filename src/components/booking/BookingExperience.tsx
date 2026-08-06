@@ -2,19 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { QRCodeSVG } from "qrcode.react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_TYPE_LABELS, formatSAR } from "@/lib/utils";
+import { FIXED_START_HOUR, priceForType, riyadhDateToIso, spaceImageUrl, toDateInputValue } from "@/lib/booking-wizard-helpers";
 import { TimeSlotPicker } from "@/components/booking/TimeSlotPicker";
 import type { BookingDTO, BookingType, SpaceDTO } from "@/types";
 
-const BOOKING_TYPE_ORDER: BookingType[] = [
-  "HOURLY",
-  "FOUR_HOUR",
-  "DAILY",
-  "MONTHLY_MORNING",
-  "MONTHLY_EVENING",
-];
+type MainTab = "spaces" | "memberships";
+
+const SPACE_TYPES: BookingType[] = ["HOURLY", "FOUR_HOUR", "DAILY"];
+const MEMBERSHIP_TYPES: BookingType[] = ["MONTHLY_MORNING", "MONTHLY_EVENING"];
 
 /** أوصاف إضافية لكل نوع حجز — تُعرض تحت السعر عند اختيار النوع. */
 const BOOKING_TYPE_HINTS: Partial<Record<BookingType, string>> = {
@@ -23,35 +23,11 @@ const BOOKING_TYPE_HINTS: Partial<Record<BookingType, string>> = {
   MONTHLY_EVENING: "الفترة المسائية: 4:00 عصراً – 11:00 مساءً، يومياً لمدة 30 يوماً",
 };
 
-/** الساعة الثابتة (بتوقيت الرياض) لبدء الحجوزات التي لا تحتاج اختيار وقت دقيق (يومي/شهري). */
-const FIXED_START_HOUR: Partial<Record<BookingType, number>> = {
-  DAILY: 9,
-  MONTHLY_MORNING: 8,
-  MONTHLY_EVENING: 16,
-};
-
-function priceForType(space: SpaceDTO, type: BookingType): number | null {
-  const map: Record<BookingType, string | null> = {
-    HOURLY: space.hourlyPrice,
-    FOUR_HOUR: space.fourHourPrice,
-    DAILY: space.dailyPrice,
-    MONTHLY_MORNING: space.monthlyMorningPrice,
-    MONTHLY_EVENING: space.monthlyEveningPrice,
-  };
-  const value = map[type];
-  return value ? Number(value) : null;
-}
-
-function toDateInputValue(date: Date) {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-/** يبني لحظة UTC من تاريخ (يوم فقط) وساعة بتوقيت الرياض الثابت (UTC+3، بلا توقيت صيفي). */
-function riyadhDateToIso(dateStr: string, riyadhHour: number): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d, riyadhHour - 3, 0, 0)).toISOString();
-}
+const DURATION_OPTIONS: { hours: 1 | 2 | 3; label: string }[] = [
+  { hours: 1, label: "ساعة" },
+  { hours: 2, label: "ساعتين" },
+  { hours: 3, label: "ثلاث ساعات" },
+];
 
 const arabicDateOnlyFormatter = new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium" });
 
@@ -106,13 +82,16 @@ function StepBreadcrumb({ step, maxReached }: { step: Step; maxReached: Step }) 
 
 export function BookingExperience() {
   const { data: session } = useSession();
+  const router = useRouter();
   const [spaces, setSpaces] = useState<SpaceDTO[]>([]);
   const [loadingSpaces, setLoadingSpaces] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  const [mainTab, setMainTab] = useState<MainTab>("spaces");
   const [step, setStep] = useState<Step>(1);
   const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
   const [bookingType, setBookingType] = useState<BookingType | null>(null);
+  const [durationHours, setDurationHours] = useState<1 | 2 | 3>(1);
   const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(new Date()));
   const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
   const [isStudent, setIsStudent] = useState(false);
@@ -129,21 +108,37 @@ export function BookingExperience() {
       .finally(() => setLoadingSpaces(false));
   }, []);
 
+  const visibleSpaces = useMemo(
+    () =>
+      mainTab === "memberships"
+        ? spaces.filter((s) => s.monthlyMorningPrice || s.monthlyEveningPrice)
+        : spaces,
+    [spaces, mainTab]
+  );
+
   const selectedSpace = useMemo(
     () => spaces.find((s) => s.id === selectedSpaceId) ?? null,
     [spaces, selectedSpaceId]
   );
 
-  const availableTypes = useMemo(
-    () => (selectedSpace ? BOOKING_TYPE_ORDER.filter((t) => priceForType(selectedSpace, t) !== null) : []),
-    [selectedSpace]
-  );
+  const availableTypes = useMemo(() => {
+    if (!selectedSpace) return [];
+    const pool = mainTab === "memberships" ? MEMBERSHIP_TYPES : SPACE_TYPES;
+    return pool.filter((t) => priceForType(selectedSpace, t) !== null);
+  }, [selectedSpace, mainTab]);
 
   const needsTimeSlot = bookingType === "HOURLY" || bookingType === "FOUR_HOUR";
   const isMonthly = bookingType === "MONTHLY_MORNING" || bookingType === "MONTHLY_EVENING";
   const studentEligible = selectedSpace ? Number(selectedSpace.studentDiscount) > 0 : false;
 
-  const previewBase = selectedSpace && bookingType ? priceForType(selectedSpace, bookingType) : null;
+  const requiredDurationMinutes = bookingType === "HOURLY" ? durationHours * 60 : bookingType === "FOUR_HOUR" ? 240 : 60;
+
+  const previewBase =
+    selectedSpace && bookingType
+      ? bookingType === "HOURLY"
+        ? (priceForType(selectedSpace, "HOURLY") ?? 0) * durationHours
+        : priceForType(selectedSpace, bookingType)
+      : null;
   const previewDiscount =
     previewBase && isStudent && studentEligible && selectedSpace
       ? Math.round(previewBase * Number(selectedSpace.studentDiscount) * 100) / 100
@@ -156,16 +151,27 @@ export function BookingExperience() {
     ? riyadhDateToIso(selectedDate, FIXED_START_HOUR[bookingType] ?? 9)
     : null;
 
+  function requireLoginOrProceed(action: () => void) {
+    if (!session?.user) {
+      router.push("/auth/login");
+      return;
+    }
+    action();
+  }
+
   function pickSpace(spaceId: string) {
-    setSelectedSpaceId(spaceId);
-    setBookingType(null);
-    setSelectedSlotIso(null);
-    setError(null);
-    setStep(2);
+    requireLoginOrProceed(() => {
+      setSelectedSpaceId(spaceId);
+      setBookingType(null);
+      setSelectedSlotIso(null);
+      setError(null);
+      setStep(2);
+    });
   }
 
   function pickType(type: BookingType) {
     setBookingType(type);
+    setDurationHours(1);
     setSelectedSlotIso(null);
     setSelectedDate(toDateInputValue(new Date()));
     setError(null);
@@ -184,6 +190,7 @@ export function BookingExperience() {
           spaceId: selectedSpace.id,
           bookingType,
           startDate: effectiveStartIso,
+          durationHours: bookingType === "HOURLY" ? durationHours : undefined,
           isStudent,
           studentIdNumber: isStudent ? studentIdNumber : undefined,
         }),
@@ -261,34 +268,76 @@ export function BookingExperience() {
 
       {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
 
-      {/* ---------- الخطوة 1: اختر المساحة ---------- */}
+      {/* ---------- الخطوة 1: المساحات / العضويات ثم اختيار المساحة ---------- */}
       {step === 1 && (
         <div>
-          <h3 className="mb-3 text-sm font-bold text-gray-700">اختر المساحة المناسبة لك</h3>
+          <div className="mb-4 flex gap-1 rounded-xl bg-gray-100 p-1 sm:w-fit">
+            <button
+              type="button"
+              onClick={() => setMainTab("spaces")}
+              className={`flex-1 rounded-lg px-5 py-2 text-sm font-bold transition sm:flex-none ${
+                mainTab === "spaces" ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
+              }`}
+            >
+              المساحات
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainTab("memberships")}
+              className={`flex-1 rounded-lg px-5 py-2 text-sm font-bold transition sm:flex-none ${
+                mainTab === "memberships" ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
+              }`}
+            >
+              العضويات
+            </button>
+          </div>
+
+          <h3 className="mb-3 text-sm font-bold text-gray-700">
+            {mainTab === "memberships" ? "اختر مساحتك للاشتراك الشهري" : "اختر المساحة المناسبة لك"}
+          </h3>
           {loadingSpaces ? (
             <p className="text-sm text-gray-500">جارِ تحميل المساحات...</p>
           ) : loadError ? (
             <p className="text-sm text-red-600">{loadError}</p>
+          ) : visibleSpaces.length === 0 ? (
+            <p className="text-sm text-gray-500">لا تتوفر عضويات شهرية حالياً.</p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {spaces.map((space) => (
-                <div key={space.id} className="flex flex-col rounded-2xl border border-gray-200 p-4">
-                  <p className="font-bold text-gray-900">{space.name}</p>
-                  <p className="mt-1 flex-1 text-xs text-gray-500">{space.description}</p>
-                  <div className="mt-3 flex items-center justify-between text-xs">
-                    <span className="text-gray-400">{space.capacityUnits} وحدة</span>
-                    {Number(space.studentDiscount) > 0 && (
-                      <span className="badge border-rimal-orange/30 bg-rimal-orange-50 text-rimal-orange-600">
-                        خصم طلاب {Math.round(Number(space.studentDiscount) * 100)}%
-                      </span>
-                    )}
+              {visibleSpaces.map((space) => (
+                <div key={space.id} className="flex flex-col overflow-hidden rounded-2xl border border-gray-200">
+                  <div className="relative h-36 w-full bg-gray-100">
+                    <Image
+                      src={spaceImageUrl(space)}
+                      alt={space.name}
+                      fill
+                      sizes="(max-width: 768px) 100vw, 33vw"
+                      className="object-cover"
+                    />
                   </div>
-                  {space.hourlyPrice && (
-                    <p className="mt-2 text-xs text-gray-500">يبدأ من {formatSAR(Number(space.hourlyPrice))}</p>
-                  )}
-                  <button type="button" onClick={() => pickSpace(space.id)} className="btn-primary mt-4 w-full">
-                    احجز الآن
-                  </button>
+                  <div className="flex flex-1 flex-col p-4">
+                    <p className="font-bold text-gray-900">{space.name}</p>
+                    <p className="mt-1 flex-1 text-xs text-gray-500">{space.description}</p>
+                    <div className="mt-3 flex items-center justify-between text-xs">
+                      <span className="text-gray-400">{space.capacityUnits} وحدة</span>
+                      {Number(space.studentDiscount) > 0 && (
+                        <span className="badge border-rimal-orange/30 bg-rimal-orange-50 text-rimal-orange-600">
+                          خصم طلاب {Math.round(Number(space.studentDiscount) * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    {mainTab === "memberships" ? (
+                      <p className="mt-2 text-xs text-gray-500">
+                        يبدأ من {formatSAR(Number(space.monthlyMorningPrice ?? space.monthlyEveningPrice))} / شهرياً
+                      </p>
+                    ) : (
+                      space.hourlyPrice && (
+                        <p className="mt-2 text-xs text-gray-500">يبدأ من {formatSAR(Number(space.hourlyPrice))}</p>
+                      )
+                    )}
+                    <button type="button" onClick={() => pickSpace(space.id)} className="btn-primary mt-4 w-full">
+                      {mainTab === "memberships" ? "اشترك الآن" : "احجز الآن"}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -321,6 +370,7 @@ export function BookingExperience() {
                   <span className="font-bold text-gray-900">{BOOKING_TYPE_LABELS[type]}</span>
                   <span className="font-extrabold text-rimal-orange">
                     {formatSAR(priceForType(selectedSpace, type)!)}
+                    {type === "HOURLY" && <span className="text-[10px] font-normal text-gray-400"> /ساعة</span>}
                   </span>
                 </div>
                 {BOOKING_TYPE_HINTS[type] && (
@@ -348,6 +398,31 @@ export function BookingExperience() {
             </h3>
             {BOOKING_TYPE_HINTS[bookingType] && (
               <p className="mb-3 text-xs text-gray-500">{BOOKING_TYPE_HINTS[bookingType]}</p>
+            )}
+
+            {bookingType === "HOURLY" && (
+              <div className="mb-4">
+                <label className="label-field">عدد الساعات</label>
+                <div className="flex gap-2">
+                  {DURATION_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.hours}
+                      type="button"
+                      onClick={() => {
+                        setDurationHours(opt.hours);
+                        setSelectedSlotIso(null);
+                      }}
+                      className={`flex-1 rounded-xl border px-3 py-2 text-sm font-bold transition ${
+                        durationHours === opt.hours
+                          ? "border-rimal-purple bg-rimal-purple-50 text-rimal-purple"
+                          : "border-gray-200 text-gray-600 hover:border-rimal-purple/40"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
 
             <label className="label-field">{isMonthly ? "تاريخ بداية الاشتراك" : "التاريخ"}</label>
@@ -381,6 +456,7 @@ export function BookingExperience() {
                   date={selectedDate}
                   value={selectedSlotIso}
                   onChange={setSelectedSlotIso}
+                  durationMinutes={requiredDurationMinutes}
                 />
                 <p className="mt-1 text-xs text-gray-400">
                   الحجز متاح يومياً من الساعة 9 صباحاً، وآخر موعد لبدء الحجز الساعة 9 مساءً (يُغلق المكان الساعة 10 مساءً).
@@ -408,24 +484,6 @@ export function BookingExperience() {
                 required
               />
             )}
-
-            {!session?.user && (
-              <div className="mt-6 rounded-xl border border-rimal-purple/20 bg-rimal-purple-50 p-4 text-sm">
-                <p className="font-bold text-gray-800">يلزم تسجيل الدخول لإتمام الحجز</p>
-                <p className="mt-1 text-gray-600">سجّل دخولك أو أنشئ حساباً جديداً لإكمال العملية.</p>
-                <div className="mt-3 flex gap-2">
-                  <a href="/auth/login" className="btn-primary px-4 py-2 text-xs">
-                    تسجيل الدخول
-                  </a>
-                  <a
-                    href="/auth/register"
-                    className="rounded-lg border border-rimal-purple px-4 py-2 text-xs font-semibold text-rimal-purple"
-                  >
-                    إنشاء حساب
-                  </a>
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="lg:col-span-2">
@@ -438,7 +496,10 @@ export function BookingExperience() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-gray-500">الباقة</dt>
-                  <dd className="font-semibold">{BOOKING_TYPE_LABELS[bookingType]}</dd>
+                  <dd className="font-semibold">
+                    {BOOKING_TYPE_LABELS[bookingType]}
+                    {bookingType === "HOURLY" && ` (${DURATION_OPTIONS.find((o) => o.hours === durationHours)?.label})`}
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-gray-500">السعر الأساسي</dt>

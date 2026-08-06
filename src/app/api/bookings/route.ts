@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "المساحة المطلوبة غير موجودة أو غير متاحة" }, { status: 404 });
     }
 
-    const endTime = computeEndTime(data.bookingType, data.startDate);
+    const endTime = computeEndTime(data.bookingType, data.startDate, data.durationHours);
 
     await assertNoBookingConflict(space, data.startDate, endTime);
 
@@ -87,7 +87,8 @@ export async function POST(req: NextRequest) {
     const { basePrice, discountAmount, finalPrice } = calculatePrice(
       space,
       data.bookingType,
-      isStudent
+      isStudent,
+      data.durationHours
     );
 
     const booking = await prisma.booking.create({

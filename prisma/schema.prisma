@@ -36,8 +36,9 @@ enum BookingStatus {
   CONFIRMED // مؤكد
   CHECKED_IN // تم تسجيل الحضور
   CHECKED_OUT // تم تسجيل الانصراف
-  CANCELLED // ملغى
-  NO_SHOW // لم يحضر
+  CANCELLED // ملغى (بعد التأكيد/الحضور)
+  NO_SHOW // لم يحضر (فائت)
+  REJECTED // مرفوض من الموظف قبل التأكيد
 }
 
 enum CheckAction {
