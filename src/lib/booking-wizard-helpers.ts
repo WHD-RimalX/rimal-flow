@@ -23,6 +23,15 @@ export function spaceImageUrl(space: SpaceDTO): string {
   return `/spaces/${space.slug}.jpg`;
 }
 
+/** أقصى عدد ساعات يمكن اختياره لباقة الساعة — يطابق الحد الأقصى في createBookingSchema. */
+export const MAX_HOURLY_DURATION = 10;
+
+export function hourLabel(hours: number): string {
+  if (hours === 1) return "ساعة";
+  if (hours === 2) return "ساعتين";
+  return `${hours} ساعات`;
+}
+
 export function toDateInputValue(date: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;

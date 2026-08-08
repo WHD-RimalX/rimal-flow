@@ -26,22 +26,30 @@ const DISPLAY_FILTERS: { id: "ALL" | DisplayStatus; label: string }[] = [
   { id: "REJECTED", label: DISPLAY_STATUS_LABELS.REJECTED },
 ];
 
-/** الحالات الخام التي يمكن للإداري تحويل الحجز إليها يدوياً، حسب حالته الحالية. */
+/** الحالات القابلة للتعديل يدوياً بحرية عبر هذه القائمة — تحويل مباشر بين أي منها. */
+const EDITABLE_STATUSES = [
+  { value: "PENDING", label: "قيد الانتظار" },
+  { value: "CONFIRMED", label: "تأكيد" },
+  { value: "REJECTED", label: "رفض" },
+  { value: "CANCELLED", label: "إلغاء" },
+];
+
+/**
+ * الحالات الخام التي يمكن للإداري تحويل الحجز إليها يدوياً، حسب حالته الحالية.
+ * الحجوزات ضمن EDITABLE_STATUSES قابلة للتنقل الحر بينها كلها (بانتظار/تأكيد/
+ * رفض/إلغاء). CHECKED_IN يُسمح فقط بإلغائه (تجاوزاً) — لا يجوز إعادته لبانتظار
+ * أو تأكيد لأن ذلك يفقد سجلات الحضور الفعلية (bufferEndsAt/expectedEndTime).
+ * CHECKED_OUT وNO_SHOW حالات نهائية ناتجة عن تدفّق فعلي (حضور/تسوية تلقائية)
+ * ولا تُعدَّل يدوياً من هنا.
+ */
 function nextStatusOptions(rawStatus: string): { value: string; label: string }[] {
-  switch (rawStatus) {
-    case "PENDING":
-      return [
-        { value: "CONFIRMED", label: "تأكيد" },
-        { value: "REJECTED", label: "رفض" },
-        { value: "CANCELLED", label: "إلغاء" },
-      ];
-    case "CONFIRMED":
-      return [{ value: "CANCELLED", label: "إلغاء" }];
-    case "CHECKED_IN":
-      return [{ value: "CANCELLED", label: "إلغاء" }];
-    default:
-      return [];
+  if (EDITABLE_STATUSES.some((s) => s.value === rawStatus)) {
+    return EDITABLE_STATUSES.filter((s) => s.value !== rawStatus);
   }
+  if (rawStatus === "CHECKED_IN") {
+    return [{ value: "CANCELLED", label: "إلغاء" }];
+  }
+  return [];
 }
 
 /**

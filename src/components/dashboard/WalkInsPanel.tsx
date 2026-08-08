@@ -10,33 +10,21 @@ import {
 import { BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
 import { FIXED_START_HOUR, priceForType, riyadhDateToIso, toDateInputValue } from "@/lib/booking-wizard-helpers";
 import { TimeSlotPicker } from "@/components/booking/TimeSlotPicker";
-import type { BookingDTO, BookingType, SpaceDTO, UserSearchResultDTO } from "@/types";
+import { HourStepper } from "@/components/booking/HourStepper";
+import { CustomerPicker, type CustomerSelection } from "@/components/booking/CustomerPicker";
+import type { BookingDTO, BookingType, SpaceDTO } from "@/types";
 
 const CREATABLE_TYPES: BookingType[] = ["HOURLY", "FOUR_HOUR", "DAILY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
-const DURATION_OPTIONS: { hours: 1 | 2 | 3; label: string }[] = [
-  { hours: 1, label: "ساعة" },
-  { hours: 2, label: "ساعتين" },
-  { hours: 3, label: "ثلاث ساعات" },
-];
-
-type CustomerMode = "existing" | "guest";
 
 /** نموذج تسجيل حجز جديد من لوحة التحكم — إما لعميل مسجَّل مسبقاً (بحث بالاسم/الجوال)
  *  أو لضيف walk-in بلا حساب (اسم + جوال فقط، يظهر لاحقاً في قائمة الزائرين). */
 function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
   const [spaces, setSpaces] = useState<SpaceDTO[]>([]);
-  const [customerMode, setCustomerMode] = useState<CustomerMode>("guest");
-
-  const [userQuery, setUserQuery] = useState("");
-  const [userResults, setUserResults] = useState<UserSearchResultDTO[]>([]);
-  const [selectedUser, setSelectedUser] = useState<UserSearchResultDTO | null>(null);
-
-  const [guestName, setGuestName] = useState("");
-  const [guestPhone, setGuestPhone] = useState("");
+  const [customerSelection, setCustomerSelection] = useState<CustomerSelection | null>(null);
 
   const [spaceId, setSpaceId] = useState("");
   const [bookingType, setBookingType] = useState<BookingType>("HOURLY");
-  const [durationHours, setDurationHours] = useState<1 | 2 | 3>(1);
+  const [durationHours, setDurationHours] = useState(1);
   const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(new Date()));
   const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
 
@@ -51,19 +39,6 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
       })
       .catch(() => {});
   }, []);
-
-  useEffect(() => {
-    if (userQuery.trim().length < 2) {
-      setUserResults([]);
-      return;
-    }
-    const handle = setTimeout(() => {
-      apiFetch<{ users: UserSearchResultDTO[] }>(`/api/users/search?q=${encodeURIComponent(userQuery.trim())}`)
-        .then((data) => setUserResults(data.users))
-        .catch(() => setUserResults([]));
-    }, 300);
-    return () => clearTimeout(handle);
-  }, [userQuery]);
 
   const selectedSpace = useMemo(() => spaces.find((s) => s.id === spaceId) ?? null, [spaces, spaceId]);
   const availableTypes = useMemo(
@@ -80,12 +55,8 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedSpace || !effectiveStartIso) return;
-    if (customerMode === "existing" && !selectedUser) {
-      setError("يجب اختيار عميل مسجَّل من نتائج البحث");
-      return;
-    }
-    if (customerMode === "guest" && (!guestName.trim() || !guestPhone.trim())) {
-      setError("يجب إدخال اسم ورقم جوال الضيف");
+    if (!customerSelection) {
+      setError("يجب اختيار عميل مسجَّل أو إدخال بيانات ضيف كاملة");
       return;
     }
 
@@ -99,15 +70,10 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
           bookingType,
           startDate: effectiveStartIso,
           durationHours: bookingType === "HOURLY" ? durationHours : undefined,
-          ...(customerMode === "existing"
-            ? { customerUserId: selectedUser!.id }
-            : { guestName: guestName.trim(), guestPhone: guestPhone.trim() }),
+          ...customerSelection,
         }),
       });
-      setGuestName("");
-      setGuestPhone("");
-      setSelectedUser(null);
-      setUserQuery("");
+      setCustomerSelection(null);
       setSelectedSlotIso(null);
       onCreated();
     } catch (err) {
@@ -121,86 +87,7 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
     <form onSubmit={handleSubmit} className="card space-y-4">
       <h3 className="text-sm font-bold text-gray-700">تسجيل حجز جديد</h3>
 
-      <div className="flex gap-1 rounded-xl bg-gray-100 p-1 sm:w-fit">
-        <button
-          type="button"
-          onClick={() => setCustomerMode("existing")}
-          className={`flex-1 rounded-lg px-4 py-2 text-xs font-bold transition sm:flex-none ${
-            customerMode === "existing" ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
-          }`}
-        >
-          عميل مسجَّل
-        </button>
-        <button
-          type="button"
-          onClick={() => setCustomerMode("guest")}
-          className={`flex-1 rounded-lg px-4 py-2 text-xs font-bold transition sm:flex-none ${
-            customerMode === "guest" ? "bg-white text-rimal-purple shadow-sm" : "text-gray-500"
-          }`}
-        >
-          ضيف walk-in جديد
-        </button>
-      </div>
-
-      {customerMode === "existing" ? (
-        <div>
-          <label className="label-field">ابحث بالاسم أو رقم الجوال</label>
-          {selectedUser ? (
-            <div className="flex items-center justify-between rounded-lg bg-rimal-purple-50 px-3 py-2 text-sm">
-              <span className="font-semibold text-gray-800">
-                {selectedUser.name} <span className="text-xs text-gray-400">{selectedUser.phone}</span>
-              </span>
-              <button type="button" onClick={() => setSelectedUser(null)} className="text-xs text-gray-400 hover:text-rimal-purple">
-                تغيير
-              </button>
-            </div>
-          ) : (
-            <>
-              <input
-                className="input-field"
-                placeholder="مثال: أحمد أو 05xxxxxxxx"
-                value={userQuery}
-                onChange={(e) => setUserQuery(e.target.value)}
-              />
-              {userResults.length > 0 && (
-                <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-xl bg-gray-50 p-1.5">
-                  {userResults.map((u) => (
-                    <button
-                      type="button"
-                      key={u.id}
-                      onClick={() => {
-                        setSelectedUser(u);
-                        setUserResults([]);
-                      }}
-                      className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-right text-sm transition hover:bg-white hover:shadow-sm"
-                    >
-                      <span className="font-medium text-gray-800">{u.name}</span>
-                      <span className="text-xs text-gray-400">{u.phone}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="label-field">اسم الضيف</label>
-            <input className="input-field" value={guestName} onChange={(e) => setGuestName(e.target.value)} required />
-          </div>
-          <div>
-            <label className="label-field">رقم الجوال</label>
-            <input
-              className="input-field"
-              placeholder="0512345678"
-              value={guestPhone}
-              onChange={(e) => setGuestPhone(e.target.value)}
-              required
-            />
-          </div>
-        </div>
-      )}
+      <CustomerPicker allowSelf={false} onChange={setCustomerSelection} />
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
@@ -240,27 +127,15 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
       </div>
 
       {bookingType === "HOURLY" && (
-        <div>
+        <div className="max-w-xs">
           <label className="label-field">عدد الساعات</label>
-          <div className="flex gap-2">
-            {DURATION_OPTIONS.map((opt) => (
-              <button
-                key={opt.hours}
-                type="button"
-                onClick={() => {
-                  setDurationHours(opt.hours);
-                  setSelectedSlotIso(null);
-                }}
-                className={`flex-1 rounded-xl border px-3 py-2 text-sm font-bold transition ${
-                  durationHours === opt.hours
-                    ? "border-rimal-purple bg-rimal-purple-50 text-rimal-purple"
-                    : "border-gray-200 text-gray-600 hover:border-rimal-purple/40"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <HourStepper
+            value={durationHours}
+            onChange={(h) => {
+              setDurationHours(h);
+              setSelectedSlotIso(null);
+            }}
+          />
         </div>
       )}
 
