@@ -1,0 +1,14 @@
+name: New Environment
+values:
+  - key: base_url
+    value: ''
+  - key: admin_token
+    value: ''
+  - key: user_token
+    value: ''
+  - key: victim_*_id
+    value: ''
+  - key: booking_id
+    value: ''
+  - key: chat_session
+    value: ''

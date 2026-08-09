@@ -1,0 +1,82 @@
+$kind: http-request
+name: POST /api/bookings — Create Valid Booking (capture booking_id)
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "spaceId": "{{space_id}}",
+      "startDate": "{{future_start}}",
+      "endDate": "{{future_end}}",
+      "startTime": "09:00",
+      "endTime": "12:00",
+      "bookingType": "hourly",
+      "guests": 2,
+      "notes": "QA happy-path booking"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      start.setUTCHours(9, 0, 0, 0);
+      const end = new Date(start.getTime());
+      end.setUTCHours(12, 0, 0, 0);
+      pm.variables.set('future_start', start.toISOString());
+      pm.variables.set('future_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 201 Created', function () {
+          pm.expect(pm.response.code).to.eql(201);
+      });
+
+      pm.test('Content-Type is application/json', function () {
+          pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');
+      });
+
+      const body = pm.response.json();
+
+      pm.test('Schema: booking fields are present', function () {
+          pm.expect(body).to.have.property('id');
+          pm.expect(body).to.have.property('startDate');
+          pm.expect(body).to.have.property('endDate');
+          pm.expect(body).to.have.property('status');
+      });
+
+      pm.test('Schema: id is a non-empty string', function () {
+          pm.expect(body.id).to.be.a('string').and.to.have.length.above(0);
+      });
+
+      pm.test('Schema: startDate and endDate are valid ISO 8601 timestamps', function () {
+          pm.expect(body.startDate).to.be.a('string');
+          pm.expect(body.endDate).to.be.a('string');
+          pm.expect(Number.isNaN(Date.parse(body.startDate)), 'startDate parseable').to.be.false;
+          pm.expect(Number.isNaN(Date.parse(body.endDate)), 'endDate parseable').to.be.false;
+      });
+
+      pm.test('Business logic: endDate is strictly after startDate', function () {
+          pm.expect(Date.parse(body.endDate)).to.be.above(Date.parse(body.startDate));
+      });
+
+      pm.test('Business logic: new booking starts in PENDING state', function () {
+          pm.expect(body.status).to.eql('PENDING');
+      });
+
+      pm.test('Schema: status is a valid lifecycle value', function () {
+          pm.expect(['PENDING','CONFIRMED','CANCELLED','CHECKED_IN','CHECKED_OUT','NO_SHOW']).to.include(body.status);
+      });
+
+      pm.test('No sensitive internals leaked in the created record', function () {
+          pm.expect(body).to.not.have.property('password');
+          pm.expect(pm.response.text()).to.not.include('node_modules');
+      });
+
+      if (body && typeof body.id === 'string' && body.id.length > 0) {
+          pm.collectionVariables.set('booking_id', body.id);
+      }
+    language: text/javascript
+order: 1000

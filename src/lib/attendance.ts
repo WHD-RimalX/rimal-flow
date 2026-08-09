@@ -140,6 +140,22 @@ export function customerNameOf(booking: BookingDTO): string {
   return booking.user?.name ?? booking.guestName ?? "عميل";
 }
 
+/**
+ * علامة نصية تُضاف إلى ملاحظات الحجز عند إلغائه تلقائياً (لا يدوياً من موظف)
+ * بسبب عدم تأكيده خلال مهلة السماح — راجع reconcileExpiredBookings في
+ * src/lib/booking-lifecycle.ts (خادم فقط). موجودة هنا (ملف آمن للعميل) ليستخدمها
+ * كل من الخادم (عند كتابتها) والواجهة (عند عرض السبب المناسب للحجوزات الملغاة).
+ */
+export const AUTO_CANCEL_NOTE_MARKER = "[AUTO_CANCEL_NO_CONFIRM]";
+
+/** سبب إلغاء واضح للعميل والموظف: تلقائي لعدم التأكيد، أو يدوي من الإدارة. */
+export function cancellationReasonText(notes: string | null | undefined): string {
+  if (notes?.startsWith(AUTO_CANCEL_NOTE_MARKER)) {
+    return "أُلغي الحجز تلقائياً لعدم تأكيده خلال 5 دقائق من إنشائه";
+  }
+  return "تم إلغاء هذا الحجز من قِبل الإدارة";
+}
+
 export type DisplayStatus =
   | "PENDING"
   | "CONFIRMED"

@@ -87,6 +87,15 @@ export interface UserSearchResultDTO {
   role: "USER" | "RECEPTION" | "ADMIN" | "SUPER_ADMIN";
 }
 
+export interface CustomerDTO {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  isStudent: boolean;
+  createdAt: string;
+}
+
 export interface DashboardSummaryDTO {
   totalToday: number;
   currentlyCheckedIn: number;

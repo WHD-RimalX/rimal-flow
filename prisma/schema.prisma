@@ -68,6 +68,7 @@ model User {
 
   bookings        Booking[]     @relation("UserBookings")
   performedChecks CheckInLog[]  @relation("StaffCheckLogs")
+  statusActions   BookingStatusHistory[] @relation("BookingStatusActor")
 
   @@index([role])
   @@map("users")
@@ -157,13 +158,65 @@ model Booking {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  checkInLogs CheckInLog[]
+  checkInLogs   CheckInLog[]
+  statusHistory BookingStatusHistory[]
 
   @@index([spaceId, startTime, endTime])
   @@index([spaceId, seatIndex])
   @@index([status])
   @@index([userId])
   @@map("bookings")
+}
+
+// ----------------------------------------------------------------------------
+// BookingStatusHistory — سجل تدقيق ثابت لكل انتقال حالة حجز (تدقيق أمني SECURITY-AUDIT.md §3)
+// ----------------------------------------------------------------------------
+
+model BookingStatusHistory {
+  id String @id @default(cuid())
+
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  // null لأول حالة (إنشاء الحجز) — بقية الصفوف تسجّل الحالة السابقة فعلياً
+  fromStatus BookingStatus?
+  toStatus   BookingStatus
+
+  // الفاعل الذي نفّذ الانتقال — null فقط للتحويلات الآلية (المصالحة الكسولة/النظام)
+  actorId String?
+  actor   User?   @relation("BookingStatusActor", fields: [actorId], references: [id])
+  // "SYSTEM" للمصالحة الآلية، أو معرّف الفاعل الفعلي — يوثّق مصدر التحويل حتى لو actorId فارغ
+  actorLabel String?
+
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([bookingId, createdAt])
+  @@map("booking_status_history")
+}
+
+// ----------------------------------------------------------------------------
+// InboundEvent — سجل استلام أحداث محول الربط الخارجي (idempotency حقيقي، SECURITY-AUDIT.md §4)
+// ----------------------------------------------------------------------------
+
+model InboundEvent {
+  id String @id @default(cuid())
+
+  // معرّف مصدر الحدث (نظام الربط المُرسِل) — راجع src/lib/integration-auth.ts
+  sourceId          String
+  externalEventId   String
+  externalBookingId String
+  eventType         String
+  // بصمة SHA-256 لمحتوى الحدث — تمييز إعادة إرسال بنفس المعرّف لكن بحمولة مختلفة (409)
+  payloadHash String
+  processedAt DateTime @default(now())
+  // نتيجة المعالجة المخزَّنة — تُعاد كما هي عند إعادة إرسال حدث سبقت معالجته بنجاح
+  result Json?
+
+  @@unique([sourceId, externalEventId])
+  @@index([sourceId, externalBookingId, eventType])
+  @@map("inbound_events")
 }
 
 // ----------------------------------------------------------------------------

@@ -1,0 +1,43 @@
+$kind: http-request
+name: POST /api/bookings — No Bearer Token (expect 401)
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "spaceId": "{{space_id}}",
+      "startDate": "{{anon_start}}",
+      "endDate": "{{anon_end}}",
+      "bookingType": "hourly"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      start.setUTCHours(10, 0, 0, 0);
+      const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+      pm.variables.set('anon_start', start.toISOString());
+      pm.variables.set('anon_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Unauthenticated booking creation is rejected with 401', function () {
+          pm.expect(pm.response.code).to.eql(401);
+      });
+
+      pm.test('Error body uses the standard { error } shape', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+          pm.expect(body.error).to.be.a('string');
+      });
+
+      pm.test('CRITICAL: no booking record was created for an anonymous caller', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.not.have.property('id');
+          pm.expect(body).to.not.have.property('status');
+      });
+    language: text/javascript
+order: 1000

@@ -1,0 +1,46 @@
+$kind: http-request
+name: "ATTACK 3 — IDOR via Body Injection: userId Override on Create"
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "userId": "clx_usr_victim_999",
+      "spaceId": "{{space_id}}",
+      "startDate": "{{idor_start}}",
+      "endDate": "{{idor_end}}",
+      "startTime": "14:00",
+      "endTime": "15:00",
+      "bookingType": "hourly"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 168 * 60 * 60 * 1000);
+      start.setUTCHours(14, 0, 0, 0);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      pm.variables.set('idor_start', start.toISOString());
+      pm.variables.set('idor_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Request completes without a server error', function () {
+          pm.expect(pm.response.code).to.be.below(500);
+      });
+
+      if ([200, 201].includes(pm.response.code)) {
+          const body = pm.response.json();
+          pm.test('CRITICAL: injected userId was IGNORED — ownership comes from the token', function () {
+              pm.expect(body.userId).to.not.eql('clx_usr_victim_999');
+          });
+      } else {
+          pm.test('Injected foreign userId was rejected outright (400/403/422)', function () {
+              pm.expect([400, 403, 422]).to.include(pm.response.code);
+          });
+      }
+    language: text/javascript
+order: 3000

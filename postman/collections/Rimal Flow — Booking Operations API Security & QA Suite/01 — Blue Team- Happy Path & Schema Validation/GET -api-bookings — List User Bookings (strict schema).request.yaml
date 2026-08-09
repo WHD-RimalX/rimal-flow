@@ -1,0 +1,47 @@
+$kind: http-request
+name: GET /api/bookings — List User Bookings (strict schema)
+url: "{{base_url}}/api/bookings"
+method: GET
+headers:
+  Authorization: Bearer {{user_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 200 OK', function () {
+          pm.response.to.have.status(200);
+      });
+
+      const body = pm.response.json();
+      const rows = Array.isArray(body) ? body : (body.data || body.bookings || []);
+
+      pm.test('Response exposes an array of bookings', function () {
+          pm.expect(rows).to.be.an('array');
+      });
+
+      pm.test('Every booking row matches the contract schema', function () {
+          const validStatus = ['PENDING','CONFIRMED','CANCELLED','CHECKED_IN','CHECKED_OUT','NO_SHOW'];
+          rows.forEach(function (b, i) {
+              pm.expect(b.id, 'row ' + i + ' id').to.be.a('string').and.to.have.length.above(0);
+              pm.expect(b.startDate, 'row ' + i + ' startDate').to.be.a('string');
+              pm.expect(b.endDate, 'row ' + i + ' endDate').to.be.a('string');
+              pm.expect(Number.isNaN(Date.parse(b.startDate)), 'row ' + i + ' startDate parseable').to.be.false;
+              pm.expect(Number.isNaN(Date.parse(b.endDate)), 'row ' + i + ' endDate parseable').to.be.false;
+              pm.expect(validStatus, 'row ' + i + ' status').to.include(b.status);
+          });
+      });
+
+      pm.test('Chronology holds for every row: endDate > startDate', function () {
+          rows.forEach(function (b, i) {
+              pm.expect(Date.parse(b.endDate), 'row ' + i).to.be.at.least(Date.parse(b.startDate));
+          });
+      });
+
+      pm.test('The booking created in the previous step is present', function () {
+          const created = pm.collectionVariables.get('booking_id');
+          if (created) {
+              const found = rows.some(function (b) { return b.id === created; });
+              pm.expect(found, 'created booking should appear in the user list').to.be.true;
+          }
+      });
+    language: text/javascript
+order: 2000

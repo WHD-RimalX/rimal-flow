@@ -1,0 +1,18 @@
+$kind: http-request
+name: GET /api/bookings — No Bearer Token on Read (expect 401)
+url: "{{base_url}}/api/bookings"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Anonymous read is rejected with 401', function () {
+          pm.expect(pm.response.code).to.eql(401);
+      });
+
+      pm.test('No booking data leaked to an anonymous caller', function () {
+          const raw = pm.response.text();
+          pm.expect(raw).to.not.include('startDate');
+          pm.expect(raw).to.not.include('guestPhone');
+      });
+    language: text/javascript
+order: 2000

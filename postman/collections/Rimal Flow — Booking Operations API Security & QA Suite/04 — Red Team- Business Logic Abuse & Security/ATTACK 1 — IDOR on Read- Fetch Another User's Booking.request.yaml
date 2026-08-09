@@ -1,0 +1,29 @@
+$kind: http-request
+name: "ATTACK 1 — IDOR on Read: Fetch Another User's Booking"
+url: "{{base_url}}/api/bookings/{{victim_booking_id}}"
+method: GET
+headers:
+  Authorization: Bearer {{user_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Cross-user booking read is blocked (403/404)', function () {
+          pm.expect([403, 404]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: another user booking is never disclosed', function () {
+          if (pm.response.code === 200) {
+              pm.expect.fail('IDOR: booking belonging to another user was returned');
+          } else {
+              pm.expect(pm.response.code).to.be.below(500);
+          }
+      });
+
+      pm.test('No victim PII leaked in the rejection body', function () {
+          const raw = pm.response.text();
+          pm.expect(raw).to.not.include('guestPhone');
+          pm.expect(raw).to.not.include('guestEmail');
+          pm.expect(raw).to.not.include('startDate');
+      });
+    language: text/javascript
+order: 1000

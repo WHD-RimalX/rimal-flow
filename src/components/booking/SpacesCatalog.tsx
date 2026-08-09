@@ -35,18 +35,36 @@ const GROUPS: CatalogGroup[] = [
   },
 ];
 
+// عدد الأشخاص المعروض على بطاقة كل مساحة = سعة "الحجز الواحد" منها (وليس
+// إجمالي كل الوحدات المتزامنة مجتمعة) — قيمة عرض بحتة، لا تُخزَّن في قاعدة
+// البيانات ولا تمس capacityUnits (التي تبقى دائماً هي المتحكم الفعلي بعدد
+// الحجوزات المتزامنة المسموحة وبخريطة المقاعد). مثال: مساحة العمل المشتركة
+// فيها 17 كرسياً منفصلاً لكن كل حجز واحد لشخص واحد فقط، فتُعرض "شخص واحد"؛
+// لاونج كبار الشخصيات كيان واحد يُحجز دفعة واحدة لمجموعة حتى 10 أشخاص.
+// أي مساحة غير مذكورة هنا تعرض capacityUnits كما هي (سلوك افتراضي معقول).
+const DISPLAY_PERSON_CAPACITY: Record<string, number> = {
+  "shared-workspace": 1,
+  "dual-workspace": 2,
+  "vip-lounge": 10,
+  "open-training-hall": 30,
+  "innovation-hub": 7,
+};
+
+function totalPersonCapacity(space: SpaceDTO): number {
+  return DISPLAY_PERSON_CAPACITY[space.slug] ?? space.capacityUnits;
+}
+
 function personCountLabel(n: number): string {
   if (n === 1) return "شخص واحد";
   if (n === 2) return "شخصان";
   return `${n} أشخاص`;
 }
 
-// نفس منطق تمييز الألوان حسب الباقة في تسعير rimalx.co: بالساعة/4 ساعات برتقالي،
+// نفس منطق تمييز الألوان حسب الباقة في تسعير rimalx.co: بالساعة برتقالي،
 // اليومي أسود محايد، والاشتراك الشهري بنفسجي (يمثّل امتداداً زمنياً أطول).
 function priceRows(space: SpaceDTO) {
   return [
     { label: "ساعة", value: space.hourlyPrice, colorClass: "text-rimal-orange" },
-    { label: "4 ساعات", value: space.fourHourPrice, colorClass: "text-rimal-orange" },
     { label: "يومي", value: space.dailyPrice, colorClass: "text-gray-900" },
     { label: "☀️ شهري صباحي", value: space.monthlyMorningPrice, colorClass: "text-rimal-purple" },
     { label: "🌙 شهري مسائي", value: space.monthlyEveningPrice, colorClass: "text-rimal-purple" },
@@ -61,7 +79,7 @@ function SpaceCard({ space, onPick }: { space: SpaceDTO; onPick: (spaceId: strin
       <div className="relative h-44 w-full shrink-0 bg-gray-100">
         <Image src={spaceImageUrl(space)} alt={space.name} fill sizes="(max-width: 768px) 100vw, 25vw" className="object-cover" />
         <span className="absolute right-3 top-3 rounded-full bg-neutral-900/80 px-2.5 py-1 text-[11px] font-semibold text-white">
-          👤 {personCountLabel(space.capacityUnits)}
+          👤 {personCountLabel(totalPersonCapacity(space))}
         </span>
         {discountPercent > 0 && (
           <span className="absolute left-3 top-3 rounded-full bg-rimal-orange px-2.5 py-1 text-[11px] font-bold text-white">

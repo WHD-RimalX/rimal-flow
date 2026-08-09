@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createBookingSchema, listBookingsQuerySchema, parseStatusFilter } from "@/validations/booking";
 import { calculatePrice, computeEndTime } from "@/lib/pricing";
@@ -9,6 +10,7 @@ import { getAuthSession, UnauthorizedError } from "@/lib/session";
 import { isStaff } from "@/lib/rbac";
 import { serializeBooking } from "@/lib/serialize-booking";
 import { reconcileExpiredBookings } from "@/lib/booking-lifecycle";
+import { recordStatusTransition } from "@/lib/booking-state-machine";
 import { endOfDay, startOfDay } from "date-fns";
 
 /**
@@ -34,6 +36,16 @@ export async function POST(req: NextRequest) {
     const bookForExistingCustomer = Boolean(data.customerUserId);
     const bookAsGuest = Boolean(data.guestName && data.guestPhone);
 
+    // SECURITY-AUDIT.md §5 (FLOW-C07/C08): customerUserId يقدر ينسب الحجز لأي
+    // مستخدم آخر معروف المعرّف — يجب أن يبقى حصراً بيد الموظفين، وإلا يقدر أي
+    // عميل عادي يحجز باسم عميل آخر يعرف معرّفه فقط.
+    if (bookForExistingCustomer && !staffCaller) {
+      return NextResponse.json(
+        { error: "تحديد عميل آخر (customerUserId) متاح للموظفين فقط" },
+        { status: 403 }
+      );
+    }
+
     // لا يجوز لموظف استقبال/مدير إنشاء حجز "مجرّد" منسوب لحسابه هو — يجب دائماً
     // تحديد المستفيد الفعلي: إما عميل مسجَّل بالنظام (customerUserId) أو بيانات ضيف كاملة.
     if (staffCaller && !bookForExistingCustomer && !bookAsGuest) {
@@ -54,73 +66,108 @@ export async function POST(req: NextRequest) {
       targetCustomerIsStudent = targetUser.isStudent;
     }
 
-    const space = await prisma.space.findUnique({ where: { id: data.spaceId } });
-    if (!space || !space.isActive) {
+    const spaceLookup = await prisma.space.findUnique({ where: { id: data.spaceId } });
+    if (!spaceLookup || !spaceLookup.isActive) {
       return NextResponse.json({ error: "المساحة المطلوبة غير موجودة أو غير متاحة" }, { status: 404 });
     }
 
     const endTime = computeEndTime(data.bookingType, data.startDate, data.durationHours);
 
-    await assertNoBookingConflict(space, data.startDate, endTime);
-
-    // إن كان هذا تخصيصاً يدوياً لمقعد محدَّد من الخريطة، تأكد أن هذا المقعد بالذات
-    // غير مشغول فعلياً بحجز آخر متداخل زمنياً (منفصل عن سعة المساحة الإجمالية أعلاه).
-    if (data.seatIndex !== undefined) {
-      const seatTaken = await prisma.booking.findFirst({
-        where: {
-          spaceId: space.id,
-          seatIndex: data.seatIndex,
-          status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
-          startTime: { lt: endTime },
-          endTime: { gt: data.startDate },
-        },
-      });
-      if (seatTaken) {
-        return NextResponse.json({ error: "هذا المقعد مشغول بالفعل بحجز آخر في هذا التوقيت" }, { status: 409 });
-      }
-    }
-
     // خصم الطلاب يُطبَّق فقط إن كانت المساحة تدعمه؛ وإلا يُتجاهل حتى لو طلبه العميل.
     // عند التخصيص لعميل مسجَّل، يُعتمد على حقل isStudent الموثّق في حسابه بدل تصريح الموظف اليدوي.
     const requestedStudent = targetCustomerId ? targetCustomerIsStudent : data.isStudent;
-    const isStudent = requestedStudent && Number(space.studentDiscount) > 0;
+    const isStudent = requestedStudent && Number(spaceLookup.studentDiscount) > 0;
     const { basePrice, discountAmount, finalPrice } = calculatePrice(
-      space,
+      spaceLookup,
       data.bookingType,
       isStudent,
       data.durationHours
     );
 
-    const booking = await prisma.booking.create({
-      data: {
-        bookingCode: generateBookingCode(),
-        userId: targetCustomerId ?? (bookAsGuest ? null : session.user.id),
-        guestName: targetCustomerId ? null : bookAsGuest ? data.guestName : null,
-        guestPhone: targetCustomerId ? null : bookAsGuest ? data.guestPhone : null,
-        guestEmail: targetCustomerId ? null : bookAsGuest ? data.guestEmail ?? null : null,
-        spaceId: space.id,
-        seatIndex: data.seatIndex ?? null,
-        bookingType: data.bookingType,
-        startTime: data.startDate,
-        endTime,
-        isStudent,
-        basePrice,
-        discountAmount,
-        finalPrice,
-        notes: data.notes,
-        // يبدأ كل حجز جديد بحالة PENDING (توافقاً مع عقد التكامل §10) ويحتاج
-        // تأكيداً يدوياً صريحاً من موظف عبر PATCH /api/admin/bookings/:id —
-        // لم يعد يُنشأ مؤكَّداً تلقائياً كما كان سابقاً.
-        status: "PENDING",
+    // SECURITY-AUDIT.md §1 (FLOW-C04): فحص التعارض والإدراج كانا عمليتين منفصلتين
+    // غير ذريتين (TOCTOU) — طلبان متزامنان لنفس المساحة يقرآن "لا تعارض" معاً قبل
+    // أن يُدرج أي منهما، فينجح كلاهما معاً ويتجاوز عدد الحجوزات النشطة السعة. الحل
+    // الأدنى المُوصى به في التدقيق (بانتظار إعادة تصميم كاملة بوحدات مساحة منفصلة
+    // وقيد EXCLUDE في قاعدة البيانات): تسلسل كل الكتابات على نفس صف المساحة بقفل
+    // SELECT ... FOR UPDATE ضمن معاملة، وإعادة فحص التعارض *داخل* تلك المعاملة —
+    // فيصبح "فحص ثم إدراج" ذرياً فعلياً بالنسبة لأي طلب آخر لنفس المساحة.
+    const booking = await prisma.$transaction(
+      async (tx) => {
+        const locked = await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "spaces" WHERE "id" = ${spaceLookup.id} FOR UPDATE
+        `;
+        if (locked.length === 0) {
+          throw new Error("SPACE_VANISHED");
+        }
+
+        await assertNoBookingConflict(spaceLookup, data.startDate, endTime, undefined, tx);
+
+        // إن كان هذا تخصيصاً يدوياً لمقعد محدَّد من الخريطة، تأكد أن هذا المقعد بالذات
+        // غير مشغول فعلياً بحجز آخر متداخل زمنياً (منفصل عن سعة المساحة الإجمالية أعلاه).
+        if (data.seatIndex !== undefined) {
+          const seatTaken = await tx.booking.findFirst({
+            where: {
+              spaceId: spaceLookup.id,
+              seatIndex: data.seatIndex,
+              status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
+              startTime: { lt: endTime },
+              endTime: { gt: data.startDate },
+            },
+          });
+          if (seatTaken) {
+            throw new SeatTakenError();
+          }
+        }
+
+        const created = await tx.booking.create({
+          data: {
+            bookingCode: generateBookingCode(),
+            userId: targetCustomerId ?? (bookAsGuest ? null : session.user.id),
+            guestName: targetCustomerId ? null : bookAsGuest ? data.guestName : null,
+            guestPhone: targetCustomerId ? null : bookAsGuest ? data.guestPhone : null,
+            guestEmail: targetCustomerId ? null : bookAsGuest ? data.guestEmail ?? null : null,
+            spaceId: spaceLookup.id,
+            seatIndex: data.seatIndex ?? null,
+            bookingType: data.bookingType,
+            startTime: data.startDate,
+            endTime,
+            isStudent,
+            basePrice,
+            discountAmount,
+            finalPrice,
+            notes: data.notes,
+            // يبدأ كل حجز جديد بحالة PENDING (توافقاً مع عقد التكامل §10) ويحتاج
+            // تأكيداً يدوياً صريحاً من موظف عبر PATCH /api/admin/bookings/:id —
+            // لم يعد يُنشأ مؤكَّداً تلقائياً كما كان سابقاً.
+            status: "PENDING",
+          },
+          include: { space: true },
+        });
+
+        await recordStatusTransition({
+          tx,
+          bookingId: created.id,
+          fromStatus: null,
+          toStatus: "PENDING",
+          actorId: session.user.id,
+        });
+
+        return created;
       },
-      include: { space: true },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }
+    );
 
     return NextResponse.json(serializeBooking(booking), { status: 201 });
   } catch (error) {
+    if (error instanceof SeatTakenError) {
+      return NextResponse.json({ error: "هذا المقعد مشغول بالفعل بحجز آخر في هذا التوقيت" }, { status: 409 });
+    }
     return handleApiError(error);
   }
 }
+
+/** استثناء داخلي فقط: يُرمى ويُلتقَط ضمن نفس الملف لترجمته لاستجابة 409 خارج المعاملة. */
+class SeatTakenError extends Error {}
 
 /**
  * قائمة الحجوزات:
@@ -186,7 +233,19 @@ export async function GET(req: NextRequest) {
       }),
     ]);
 
-    return NextResponse.json({ bookings: bookings.map(serializeBooking), total, page, pageSize });
+    // SECURITY-AUDIT.md §5 (FLOW-C07/C08): قوائم الحجوزات الجماعية كانت تُعيد
+    // qrToken الدائم لكل حجز لكل موظف — موظف استقبال يتصفّح قائمة اليوم يقدر
+    // ينسخ رمز عميل لم يحضر بعد ويستخدمه بنفسه. نحجب الرمز من القوائم الجماعية
+    // لدور RECEPTION تحديداً (ADMIN/SUPER_ADMIN يبقيان لأغراض الإشراف والتدقيق،
+    // والعميل نفسه يرى رمزه الخاص دائماً لأن هذا المسار يعرض حجوزاته هو فقط).
+    const omitQrToken = staff && session.user.role === "RECEPTION";
+
+    return NextResponse.json({
+      bookings: bookings.map((b) => serializeBooking(b, { omitQrToken })),
+      total,
+      page,
+      pageSize,
+    });
   } catch (error) {
     return handleApiError(error);
   }

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { useNow } from "@/lib/hooks/useNow";
-import { computeLiveState, computeRemainingBudgetMs, findActiveCheckInLog, formatDuration } from "@/lib/attendance";
+import { cancellationReasonText, computeLiveState, computeRemainingBudgetMs, findActiveCheckInLog, formatDuration } from "@/lib/attendance";
+import { ALLOWED_ADMIN_TRANSITIONS } from "@/lib/booking-transitions";
 import {
   BOOKING_STATUS_COLORS,
   BOOKING_STATUS_LABELS,
@@ -16,6 +17,10 @@ import type { BookingDTO, BookingStatus } from "@/types";
 
 const PAGE_SIZE = 10;
 
+// أزرار الحالة اليدوية عبر PATCH /api/admin/bookings/:id — يجب أن تطابق
+// ALLOWED_ADMIN_TRANSITIONS تماماً (السيرفر يرفض أي انتقال خارجها بـ409 الآن،
+// SECURITY-AUDIT.md §3). CHECKED_IN→CHECKED_OUT مُستبعَد عمداً هنا؛ "تسجيل
+// انصراف" له زر منفصل يمرّ عبر محرك الحضور (/api/checkin) لا هذا المسار.
 const NEXT_ACTIONS: Partial<Record<BookingStatus, { label: string; next: BookingStatus }[]>> = {
   PENDING: [
     { label: "تأكيد", next: "CONFIRMED" },
@@ -26,7 +31,6 @@ const NEXT_ACTIONS: Partial<Record<BookingStatus, { label: string; next: Booking
     { label: "تسجيل عدم حضور", next: "NO_SHOW" },
     { label: "إلغاء", next: "CANCELLED" },
   ],
-  CHECKED_IN: [{ label: "تسجيل انصراف", next: "CHECKED_OUT" }],
 };
 
 type FilterId = "full_day" | "checked_in" | "checked_out";
@@ -65,7 +69,14 @@ function RemainingTimeCell({ booking, now }: { booking: BookingDTO; now: number 
     return <span className="text-xs font-semibold text-rose-600">أُلغي الحجز بسبب عدم الحضور</span>;
   }
   if (booking.status === "CANCELLED") {
-    return <span className="text-xs text-gray-300">—</span>;
+    return (
+      <span className="text-xs text-gray-400" title={cancellationReasonText(booking.notes)}>
+        ملغي — {cancellationReasonText(booking.notes)}
+      </span>
+    );
+  }
+  if (booking.status === "REJECTED") {
+    return <span className="text-xs text-gray-400">مرفوض من الإدارة</span>;
   }
 
   const liveState =
@@ -152,6 +163,24 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "تعذّر تحديث حالة الحجز");
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  // تسجيل الانصراف يمر عبر محرك الحضور (نفس مسار الماسح) لا مسار الحالة العام —
+  // هو من يُنشئ سجل CheckInLog المرافق ويحرر المقعد تلقائياً عند الاقتضاء
+  // (SECURITY-AUDIT.md §3: تحديث CHECKED_OUT المباشر كان يفسد سجلات الحضور).
+  async function performCheckOut(booking: BookingDTO) {
+    setUpdatingId(booking.id);
+    try {
+      await apiFetch("/api/checkin", {
+        method: "POST",
+        body: JSON.stringify({ bookingCode: booking.bookingCode, action: "CHECK_OUT" }),
+      });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "تعذّر تسجيل الانصراف");
     } finally {
       setUpdatingId(null);
     }
@@ -244,6 +273,15 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
                     </td>
                     <td className="py-2.5">
                       <div className="flex flex-wrap gap-1.5">
+                        {booking.status === "CHECKED_IN" && (
+                          <button
+                            disabled={updatingId === booking.id}
+                            onClick={() => performCheckOut(booking)}
+                            className="rounded-lg border border-gray-200 px-2 py-1 text-[11px] font-semibold text-gray-600 transition hover:border-rimal-purple hover:text-rimal-purple disabled:opacity-40"
+                          >
+                            تسجيل انصراف
+                          </button>
+                        )}
                         {(NEXT_ACTIONS[booking.status] ?? []).map((action) => (
                           <button
                             key={action.next}
@@ -254,10 +292,11 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
                             {action.label}
                           </button>
                         ))}
-                        {/* المدير فقط يملك خيار الإلغاء لأي حجز بأي حالة (غير الملغى أصلاً) — صلاحية canCancelBooking مفروضة من السيرفر أيضاً */}
+                        {/* المدير فقط يملك خيار الإلغاء، ومتاح فقط عندما يكون انتقالاً صالحاً فعلياً
+                            حسب آلة الحالة المركزية (حالات نهائية كـCHECKED_OUT/CANCELLED لا تقبل أي انتقال) */}
                         {isAdmin &&
-                          booking.status !== "CANCELLED" &&
-                          !(NEXT_ACTIONS[booking.status] ?? []).some((a) => a.next === "CANCELLED") && (
+                          !(NEXT_ACTIONS[booking.status] ?? []).some((a) => a.next === "CANCELLED") &&
+                          ALLOWED_ADMIN_TRANSITIONS[booking.status]?.has("CANCELLED") && (
                             <button
                               disabled={updatingId === booking.id}
                               onClick={() => updateStatus(booking.id, "CANCELLED")}

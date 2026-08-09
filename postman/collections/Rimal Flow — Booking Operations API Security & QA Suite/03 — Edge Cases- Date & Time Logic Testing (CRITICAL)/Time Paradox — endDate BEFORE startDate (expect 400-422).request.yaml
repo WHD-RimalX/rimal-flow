@@ -1,0 +1,47 @@
+$kind: http-request
+name: Time Paradox — endDate BEFORE startDate (expect 400/422)
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "spaceId": "{{space_id}}",
+      "startDate": "{{paradox_start}}",
+      "endDate": "{{paradox_end}}",
+      "startTime": "15:00",
+      "endTime": "10:00",
+      "bookingType": "hourly"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 72 * 60 * 60 * 1000);
+      start.setUTCHours(15, 0, 0, 0);
+      const end = new Date(start.getTime() - 5 * 60 * 60 * 1000);
+      pm.variables.set('paradox_start', start.toISOString());
+      pm.variables.set('paradox_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Inverted date range is rejected (400/422)', function () {
+          pm.expect([400, 422]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: endDate < startDate must never be persisted', function () {
+          if ([200, 201].includes(pm.response.code)) {
+              pm.expect.fail('Negative-duration booking was accepted — chronology validation missing');
+          } else {
+              pm.expect(pm.response.code).to.be.below(500);
+          }
+      });
+
+      pm.test('Structured error returned', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+      });
+    language: text/javascript
+order: 2000

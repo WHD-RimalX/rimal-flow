@@ -1,0 +1,30 @@
+$kind: http-request
+name: "ATTACK 6 — Self-Approval: User Patches Own Booking to CONFIRMED"
+url: "{{base_url}}/api/bookings/{{booking_id}}"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "status": "CONFIRMED"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Self-approval attempt is blocked (400/403/404/405/422)', function () {
+          pm.expect([400, 403, 404, 405, 422]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: a user cannot confirm their own booking', function () {
+          if ([200, 204].includes(pm.response.code)) {
+              const body = pm.response.json();
+              pm.expect(body.status, 'status must not become CONFIRMED via owner PATCH').to.not.eql('CONFIRMED');
+          } else {
+              pm.expect(pm.response.code).to.be.below(500);
+          }
+      });
+    language: text/javascript
+order: 6000

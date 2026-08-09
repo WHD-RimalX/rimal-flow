@@ -1,0 +1,10 @@
+workspace:
+  id: c8d07872-b518-42e1-89a4-e597f63a9f14
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  environments:
+    ../postman/environments/New Environment.environment.yaml: 56938047-4ebb6d86-6989-456f-a3c3-ebca8ff48d80
+  collections:
+    ../postman/collections/Rimal Flow — Booking Operations API Security & QA Suite: b79bb319-5f78-4741-8dd2-7770b729a099

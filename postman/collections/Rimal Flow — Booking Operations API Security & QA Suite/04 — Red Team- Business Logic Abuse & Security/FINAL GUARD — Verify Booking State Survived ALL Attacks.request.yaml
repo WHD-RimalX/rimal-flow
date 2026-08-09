@@ -1,0 +1,34 @@
+$kind: http-request
+url: "{{base_url}}/api/bookings/{{booking_id}}"
+method: GET
+headers:
+  Authorization: Bearer {{user_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 200 OK', function () {
+          pm.response.to.have.status(200);
+      });
+
+      const body = pm.response.json();
+
+      pm.test('CRITICAL: booking was not escalated to CONFIRMED by any attack', function () {
+          pm.expect(body.status).to.not.eql('CONFIRMED');
+      });
+
+      pm.test('CRITICAL: booking was not silently deleted by IDOR attempts', function () {
+          pm.expect(body).to.have.property('id');
+          pm.expect(body.id).to.eql(pm.collectionVariables.get('booking_id'));
+      });
+
+      pm.test('Chronology integrity intact after the attack suite', function () {
+          pm.expect(Date.parse(body.endDate)).to.be.above(Date.parse(body.startDate));
+      });
+
+      pm.test('Schema still intact after the attack suite', function () {
+          pm.expect(body).to.have.property('startDate');
+          pm.expect(body).to.have.property('endDate');
+          pm.expect(body).to.have.property('status');
+      });
+    language: text/javascript
+order: 9000

@@ -1,0 +1,26 @@
+$kind: http-request
+name: "ATTACK 2 — IDOR on Cancel: Cancel Another User's Booking"
+url: "{{base_url}}/api/bookings/{{victim_booking_id}}"
+method: DELETE
+headers:
+  Authorization: Bearer {{user_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Cross-user cancellation is blocked (403/404)', function () {
+          pm.expect([403, 404]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: destructive IDOR must never succeed', function () {
+          pm.expect([200, 202, 204]).to.not.include(pm.response.code);
+      });
+
+      pm.test('Ownership is derived from the token, not the URL parameter', function () {
+          if ([200, 202, 204].includes(pm.response.code)) {
+              pm.expect.fail('IDOR: another user booking was cancelled with a non-owner token');
+          } else {
+              pm.expect(pm.response.code).to.be.below(500);
+          }
+      });
+    language: text/javascript
+order: 2000

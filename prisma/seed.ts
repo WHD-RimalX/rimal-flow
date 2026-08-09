@@ -1,7 +1,23 @@
 import { PrismaClient, Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 const prisma = new PrismaClient();
+
+/**
+ * SECURITY-AUDIT.md §5 (FLOW-C07/C08): كلمتا مرور SUPER_ADMIN/RECEPTION كانتا
+ * ثابتتين في هذا الملف المرفوع لمستودع الكود — أي بيئة أُنشئت من هذا الـ seed
+ * (بما فيها بيئتنا الفعلية على Neon) يجب اعتبار بيانات دخولها القديمة مُخترَقة.
+ * (الإجراء المطلوب منك يدوياً: بدّل كلمتي مرور admin@rimalx.sa وreception@rimalx.sa
+ * الحاليتين على الإنتاج — لا يمكن للكود فعل ذلك بأمان بالنيابة عنك دون قطع دخولك
+ * الحالي فجأة). من الآن فصاعداً: في الإنتاج تُولَّد كلمة مرور عشوائية وتُطبَع في
+ * سجل التشغيل مرة واحدة فقط (وليست في الكود المصدري)؛ في بيئة التطوير المحلية
+ * فقط تبقى كلمتا المرور المعتادتان للراحة (سهولة تكرار الاختبار محلياً).
+ */
+const isProduction = process.env.NODE_ENV === "production";
+function generateBootstrapPassword(devDefault: string): string {
+  return isProduction ? crypto.randomBytes(18).toString("base64url") : devDefault;
+}
 
 const defaultWeeklyAvailability = {
   sun: { open: "08:00", close: "23:00" },
@@ -112,8 +128,9 @@ async function main() {
     console.log(`  ✔ تم إنشاء/تحديث مساحة: ${space.name}`);
   }
 
-  const adminPassword = await bcrypt.hash("RimalX@2026!", 12);
-  await prisma.user.upsert({
+  const adminPlainPassword = generateBootstrapPassword("RimalX@2026!");
+  const adminPassword = await bcrypt.hash(adminPlainPassword, 12);
+  const adminResult = await prisma.user.upsert({
     where: { email: "admin@rimalx.sa" },
     update: {},
     create: {
@@ -132,10 +149,15 @@ async function main() {
       },
     },
   });
-  console.log("  ✔ تم إنشاء حساب المدير العام (admin@rimalx.sa / RimalX@2026!)");
+  console.log(
+    adminResult.createdAt.getTime() === adminResult.updatedAt.getTime()
+      ? `  ✔ تم إنشاء حساب المدير العام (admin@rimalx.sa / ${adminPlainPassword}) — احفظ كلمة المرور هذه الآن، لن تُطبَع مجدداً`
+      : "  • حساب المدير العام موجود مسبقاً — لم تُغيَّر كلمة مروره"
+  );
 
-  const receptionPassword = await bcrypt.hash("Reception@2026!", 12);
-  await prisma.user.upsert({
+  const receptionPlainPassword = generateBootstrapPassword("Reception@2026!");
+  const receptionPassword = await bcrypt.hash(receptionPlainPassword, 12);
+  const receptionResult = await prisma.user.upsert({
     where: { email: "reception@rimalx.sa" },
     update: {},
     create: {
@@ -154,7 +176,11 @@ async function main() {
       },
     },
   });
-  console.log("  ✔ تم إنشاء حساب موظف استقبال (reception@rimalx.sa / Reception@2026!)");
+  console.log(
+    receptionResult.createdAt.getTime() === receptionResult.updatedAt.getTime()
+      ? `  ✔ تم إنشاء حساب موظف استقبال (reception@rimalx.sa / ${receptionPlainPassword}) — احفظ كلمة المرور هذه الآن، لن تُطبَع مجدداً`
+      : "  • حساب موظف الاستقبال موجود مسبقاً — لم تُغيَّر كلمة مروره"
+  );
 
   console.log("✅ اكتملت تعبئة البيانات الابتدائية بنجاح.");
 }

@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/bookings", label: "سجل الحجوزات", icon: "📋" },
   { href: "/dashboard/subscribers", label: "المشتركون", icon: "👥" },
   { href: "/dashboard/walkins", label: "الزائرون", icon: "🚶" },
+  { href: "/dashboard/customers", label: "العملاء المسجَّلون", icon: "🧾" },
 ];
 
 function roleLabel(role: string | undefined) {

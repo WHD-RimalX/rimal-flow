@@ -106,6 +106,29 @@ export const createBookingSchema = z
     path: ["endDate"],
   })
   .refine(
+    (data) => {
+      // باقة الساعة فقط لها مدة متغيّرة (1-10 ساعات) قد تمتد فعلياً بعد ساعة
+      // الإغلاق حتى لو كانت ساعة البداية صالحة بمفردها — بقية الأنواع (يومي/
+      // شهري) مدتها ثابتة ومضبوطة أصلاً لتبقى ضمن ساعات العمل.
+      if (data.bookingType !== "HOURLY") return true;
+      const hours = data.durationHours ?? 1;
+      // إزاحة الرياض (UTC+3 ثابت) مطبَّقة يدوياً على كل من البداية والنهاية
+      // لمقارنتهما "بتوقيت الرياض" دون الاعتماد على منطقة زمنية السيرفر.
+      const startRiyadh = new Date(data.startDate.getTime() + 3 * 60 * 60 * 1000);
+      const endRiyadh = new Date(startRiyadh.getTime() + hours * 60 * 60 * 1000);
+      const sameRiyadhDay =
+        startRiyadh.getUTCFullYear() === endRiyadh.getUTCFullYear() &&
+        startRiyadh.getUTCMonth() === endRiyadh.getUTCMonth() &&
+        startRiyadh.getUTCDate() === endRiyadh.getUTCDate();
+      const endMinutesSinceMidnight = endRiyadh.getUTCHours() * 60 + endRiyadh.getUTCMinutes();
+      return sameRiyadhDay && endMinutesSinceMidnight <= 22 * 60;
+    },
+    {
+      message: "مدة الحجز تتجاوز وقت إغلاق المكان (10 مساءً بتوقيت الرياض) — اختر عدد ساعات أقل أو وقت بداية أبكر",
+      path: ["durationHours"],
+    }
+  )
+  .refine(
     (data) =>
       !data.isStudent ||
       Boolean(data.customerUserId) ||

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { startOfDay } from "date-fns";
+import { AUTO_CANCEL_NOTE_MARKER } from "@/lib/attendance";
 
 const SHORT_TYPES = ["HOURLY", "FOUR_HOUR", "DAILY"] as const;
 
@@ -26,9 +27,15 @@ export async function reconcileExpiredBookings(): Promise<void> {
   const todayStart = startOfDay(now);
 
   await Promise.all([
+    // ملاحظة: يستبدل notes الحالية بالكامل بدل إلحاقها — مقبول عملياً لأن حجزاً
+    // PENDING لم يُؤكَّد بعد نادراً ما يحمل ملاحظات مهمة أصلاً، وهذا يبقي منطق
+    // reconcileExpiredBookings ضمن نمط updateMany الجماعي البسيط (بلا حلقة تحديثات فردية).
     prisma.booking.updateMany({
       where: { status: "PENDING", createdAt: { lt: pendingCutoff } },
-      data: { status: "CANCELLED" },
+      data: {
+        status: "CANCELLED",
+        notes: `${AUTO_CANCEL_NOTE_MARKER} أُلغي تلقائياً لعدم تأكيد الحجز خلال ${PENDING_CONFIRM_GRACE_MINUTES} دقائق من إنشائه`,
+      },
     }),
     prisma.booking.updateMany({
       where: {

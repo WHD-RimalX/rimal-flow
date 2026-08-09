@@ -1,0 +1,48 @@
+$kind: http-request
+name: Capacity Abuse — Guests Far Above Space Capacity (expect 400/422)
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "spaceId": "{{space_id}}",
+      "startDate": "{{cap_start}}",
+      "endDate": "{{cap_end}}",
+      "startTime": "13:00",
+      "endTime": "15:00",
+      "bookingType": "hourly",
+      "guests": 99999
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 120 * 60 * 60 * 1000);
+      start.setUTCHours(13, 0, 0, 0);
+      const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+      pm.variables.set('cap_start', start.toISOString());
+      pm.variables.set('cap_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Over-capacity request is rejected (400/409/422)', function () {
+          pm.expect([400, 409, 422]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: capacity limits are enforced server-side', function () {
+          if ([200, 201].includes(pm.response.code)) {
+              pm.expect.fail('Booking exceeding space capacity was accepted');
+          } else {
+              pm.expect(pm.response.code).to.be.below(500);
+          }
+      });
+
+      pm.test('Structured error returned', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+      });
+    language: text/javascript
+order: 4000

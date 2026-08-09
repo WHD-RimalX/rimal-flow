@@ -1,0 +1,23 @@
+$kind: http-request
+url: "{{base_url}}/api/bookings/{{booking_id}}"
+method: GET
+headers:
+  Authorization: Bearer {{user_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 200 OK', function () {
+          pm.response.to.have.status(200);
+      });
+
+      const body = pm.response.json();
+
+      pm.test('CRITICAL: forbidden approval did NOT mutate the booking state', function () {
+          pm.expect(body.status).to.not.eql('CONFIRMED');
+      });
+
+      pm.test('Booking remains in its original PENDING state', function () {
+          pm.expect(body.status).to.eql('PENDING');
+      });
+    language: text/javascript
+order: 4000

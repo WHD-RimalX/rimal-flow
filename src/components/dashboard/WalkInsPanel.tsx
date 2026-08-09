@@ -14,7 +14,7 @@ import { HourStepper } from "@/components/booking/HourStepper";
 import { CustomerPicker, type CustomerSelection } from "@/components/booking/CustomerPicker";
 import type { BookingDTO, BookingType, SpaceDTO } from "@/types";
 
-const CREATABLE_TYPES: BookingType[] = ["HOURLY", "FOUR_HOUR", "DAILY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
+const CREATABLE_TYPES: BookingType[] = ["HOURLY", "DAILY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
 
 /** نموذج تسجيل حجز جديد من لوحة التحكم — إما لعميل مسجَّل مسبقاً (بحث بالاسم/الجوال)
  *  أو لضيف walk-in بلا حساب (اسم + جوال فقط، يظهر لاحقاً في قائمة الزائرين). */
@@ -45,8 +45,7 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
     () => (selectedSpace ? CREATABLE_TYPES.filter((t) => priceForType(selectedSpace, t) !== null) : []),
     [selectedSpace]
   );
-  const needsTimeSlot = bookingType === "HOURLY" || bookingType === "FOUR_HOUR";
-  const requiredDurationMinutes = bookingType === "HOURLY" ? durationHours * 60 : bookingType === "FOUR_HOUR" ? 240 : 60;
+  const needsTimeSlot = bookingType === "HOURLY";
 
   const effectiveStartIso = needsTimeSlot
     ? selectedSlotIso
@@ -162,7 +161,7 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
             date={selectedDate}
             value={selectedSlotIso}
             onChange={setSelectedSlotIso}
-            durationMinutes={requiredDurationMinutes}
+            durationMinutes={durationHours * 60}
           />
         </div>
       )}

@@ -1,0 +1,23 @@
+$kind: http-request
+name: DELETE /api/admin/bookings/:id — Cancel With User Token (expect 403)
+url: "{{base_url}}/api/admin/bookings/{{booking_id}}"
+method: DELETE
+headers:
+  Authorization: Bearer {{user_token}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Admin cancellation blocked for non-admin (403)', function () {
+          pm.expect(pm.response.code).to.eql(403);
+      });
+
+      pm.test('CRITICAL: destructive admin action was not silently accepted', function () {
+          pm.expect([200, 202, 204]).to.not.include(pm.response.code);
+      });
+
+      pm.test('Structured error returned', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+      });
+    language: text/javascript
+order: 5000

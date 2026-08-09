@@ -1,0 +1,31 @@
+$kind: http-request
+name: "ATTACK 8 — Check-in Replay: Same QR Event Twice (idempotency)"
+url: "{{base_url}}/api/bookings/{{booking_id}}/check-in"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{admin_token}}
+body:
+  type: text
+  content: |-
+    {
+      "bookingId": "{{booking_id}}",
+      "eventType": "CHECK_IN",
+      "idempotencyKey": "qa-checkin-replay-001"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Replayed check-in does not create a duplicate event (200/400/409/422)', function () {
+          pm.expect([200, 400, 409, 422]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: a second check-in is never treated as a fresh creation', function () {
+          pm.expect(pm.response.code).to.not.eql(201);
+      });
+
+      pm.test('Server did not error on the replay (no 500)', function () {
+          pm.expect(pm.response.code).to.not.eql(500);
+      });
+    language: text/javascript
+order: 8000

@@ -1,0 +1,45 @@
+$kind: http-request
+name: Zero Duration — Identical start/end Timestamps (expect 400/422)
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "spaceId": "{{space_id}}",
+      "startDate": "{{zero_ts}}",
+      "endDate": "{{zero_ts}}",
+      "startTime": "11:00",
+      "endTime": "11:00",
+      "bookingType": "hourly"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const ts = new Date(Date.now() + 96 * 60 * 60 * 1000);
+      ts.setUTCHours(11, 0, 0, 0);
+      pm.variables.set('zero_ts', ts.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Zero-duration booking is rejected (400/422)', function () {
+          pm.expect([400, 422]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: a zero-length reservation must not occupy a slot', function () {
+          if ([200, 201].includes(pm.response.code)) {
+              pm.expect.fail('Zero-duration booking accepted — minimum duration not enforced');
+          } else {
+              pm.expect(pm.response.code).to.not.eql(500);
+          }
+      });
+
+      pm.test('Structured error returned', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+      });
+    language: text/javascript
+order: 3000

@@ -1,0 +1,49 @@
+$kind: http-request
+name: GET /api/availability — Fetch Available Time Slots
+url: "{{base_url}}/api/availability?spaceId={{space_id}}&date={{query_date}}"
+method: GET
+headers:
+  Authorization: Bearer {{user_token}}
+queryParams:
+  spaceId: "{{space_id}}"
+  date: "{{query_date}}"
+scripts:
+  - type: beforeRequest
+    code: |-
+      const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      pm.variables.set('query_date', d.toISOString().split('T')[0]);
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 200 OK', function () {
+          pm.response.to.have.status(200);
+      });
+
+      const body = pm.response.json();
+      const slots = Array.isArray(body) ? body : (body.slots || body.data || []);
+
+      pm.test('Availability response is a list of slots', function () {
+          pm.expect(slots).to.be.an('array');
+      });
+
+      pm.test('Each slot exposes a usable time window', function () {
+          slots.forEach(function (s, i) {
+              const hasWindow = (s.startTime && s.endTime) || (s.start && s.end);
+              pm.expect(Boolean(hasWindow), 'slot ' + i + ' has a start/end window').to.be.true;
+          });
+      });
+
+      pm.test('Availability flags, when present, are booleans', function () {
+          slots.forEach(function (s, i) {
+              if (Object.prototype.hasOwnProperty.call(s, 'isAvailable')) {
+                  pm.expect(s.isAvailable, 'slot ' + i + ' isAvailable').to.be.a('boolean');
+              }
+          });
+      });
+
+      pm.test('No internal error leakage in availability response', function () {
+          pm.expect(pm.response.code).to.be.below(500);
+          pm.expect(pm.response.text()).to.not.include('at Object.');
+      });
+    language: text/javascript
+order: 3000

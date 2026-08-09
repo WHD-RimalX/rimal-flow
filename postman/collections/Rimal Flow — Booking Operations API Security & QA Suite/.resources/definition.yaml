@@ -1,0 +1,10 @@
+$kind: collection
+description: "Production-grade QA and security suite for the Rimal Flow (رمال فلو) Smart Booking Operations Center API, derived from the FLOW project contract. Covers Blue Team happy-path and schema validation, authentication/RBAC separation, critical date-time boundary logic, and Red Team business-logic abuse (IDOR on read/update, mass assignment / state injection, idempotency). Requires environment variables: base_url, admin_token, user_token, booking_id. Run folders in order — 01 captures booking_id used by later folders."
+variables:
+  base_url: https://rimal-flow.vercel.app
+  admin_token: REPLACE_WITH_ADMIN_JWT
+  user_token: REPLACE_WITH_REGULAR_USER_JWT
+  booking_id: ""
+  victim_booking_id: REPLACE_WITH_BOOKING_ID_OWNED_BY_ANOTHER_USER
+  space_id: clx_spc_001
+  injection_booking_id: ""

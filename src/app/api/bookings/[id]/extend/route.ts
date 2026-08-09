@@ -7,6 +7,12 @@ import { serializeBooking } from "@/lib/serialize-booking";
 
 const HOUR_MS = 60 * 60 * 1000;
 
+class ExtendStateError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
 /**
  * تجديد حجز باقة قصيرة (ساعة/4 ساعات/يومي) بعد تجاوزه وقته المحدد وهو لا يزال
  * حاضراً (CHECKED_IN) — يُحتسب كفاتورة إضافية جديدة، بتقريب وقت التجاوز لأعلى
@@ -14,57 +20,68 @@ const HOUR_MS = 60 * 60 * 1000;
  * الفعلي بعد خصم ما استُهلِك بالفعل من التجاوز من هذه الساعة/الساعات الإضافية.
  * ذاتي الخدمة من حساب العميل نفسه (صاحب الحجز فقط) — الباقات الشهرية القابلة
  * للاستئناف أصلاً لا تحتاج هذا المسار.
+ *
+ * SECURITY-AUDIT.md §1 (FLOW-C04): كانت القراءة (وقت التجاوز الحالي) والكتابة
+ * (الرسم والتمديد) منفصلتين بلا قفل — تمديدان متزامنان يحسبان نفس وقت التجاوز
+ * فيمدّان لنفس الوقت الجديد لكن كل منهما يزيد السعر مرة، فيُحاسَب العميل مرتين
+ * عن تمديد فعلي واحد. الآن كل العملية (القراءة والحساب والكتابة) داخل معاملة
+ * تقفل صف الحجز أولاً بـ`SELECT ... FOR UPDATE`، فيُسلسِل أي تمديد متزامن آخر
+ * لنفس الحجز خلفه بدل تشغيلهما معاً على لقطة بيانات قديمة.
  */
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await requireSession();
 
-    const booking = await prisma.booking.findUnique({
-      where: { id: params.id },
-      include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" } } },
-    });
-
-    if (!booking) {
+    const bookingOwner = await prisma.booking.findUnique({ where: { id: params.id }, select: { userId: true } });
+    if (!bookingOwner) {
       return NextResponse.json({ error: "الحجز غير موجود" }, { status: 404 });
     }
-    if (booking.userId !== session.user.id) {
+    if (bookingOwner.userId !== session.user.id) {
       return NextResponse.json({ error: "لا تملك صلاحية تجديد هذا الحجز" }, { status: 403 });
     }
-    if (isResumableBookingType(booking.bookingType)) {
-      return NextResponse.json({ error: "التجديد غير مطلوب لهذا النوع من الحجوزات" }, { status: 400 });
-    }
-    if (booking.status !== "CHECKED_IN") {
-      return NextResponse.json({ error: "التجديد متاح فقط أثناء الحضور الفعلي" }, { status: 422 });
-    }
 
-    const activeLog = booking.checkInLogs.find((l) => l.action === "CHECK_IN" && l.success && l.expectedEndTime);
-    if (!activeLog?.expectedEndTime) {
-      return NextResponse.json({ error: "تعذّر تحديد جلسة الحضور الحالية" }, { status: 422 });
-    }
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "bookings" WHERE "id" = ${params.id} FOR UPDATE`;
 
-    const now = new Date();
-    const overtimeMs = now.getTime() - activeLog.expectedEndTime.getTime();
-    if (overtimeMs <= 0) {
-      return NextResponse.json({ error: "لم يتجاوز هذا الحجز وقته المحدد بعد" }, { status: 422 });
-    }
+      const booking = await tx.booking.findUniqueOrThrow({
+        where: { id: params.id },
+        include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" } } },
+      });
 
-    // التقريب لأعلى (Ceiling) وليس لأقرب ساعة — أي دقيقة تجاوز تُحتسب كساعة كاملة إضافية
-    const extraHours = Math.max(1, Math.ceil(overtimeMs / HOUR_MS));
-    const extraMs = extraHours * HOUR_MS;
-    const hourlyRate = booking.space.hourlyPrice ? Number(booking.space.hourlyPrice) : 0;
-    const extraCharge = extraHours * hourlyRate;
+      if (isResumableBookingType(booking.bookingType)) {
+        throw new ExtendStateError("التجديد غير مطلوب لهذا النوع من الحجوزات");
+      }
+      if (booking.status !== "CHECKED_IN") {
+        throw new ExtendStateError("التجديد متاح فقط أثناء الحضور الفعلي");
+      }
 
-    const newExpectedEndTime = new Date(activeLog.expectedEndTime.getTime() + extraMs);
-    const newEndTime = new Date(booking.endTime.getTime() + extraMs);
-    const newRemainingMs = newExpectedEndTime.getTime() - now.getTime();
+      const activeLog = booking.checkInLogs.find((l) => l.action === "CHECK_IN" && l.success && l.expectedEndTime);
+      if (!activeLog?.expectedEndTime) {
+        throw new ExtendStateError("تعذّر تحديد جلسة الحضور الحالية");
+      }
 
-    const updated = await prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const overtimeMs = now.getTime() - activeLog.expectedEndTime.getTime();
+      if (overtimeMs <= 0) {
+        throw new ExtendStateError("لم يتجاوز هذا الحجز وقته المحدد بعد");
+      }
+
+      // التقريب لأعلى (Ceiling) وليس لأقرب ساعة — أي دقيقة تجاوز تُحتسب كساعة كاملة إضافية
+      const extraHours = Math.max(1, Math.ceil(overtimeMs / HOUR_MS));
+      const extraMs = extraHours * HOUR_MS;
+      const hourlyRate = booking.space.hourlyPrice ? Number(booking.space.hourlyPrice) : 0;
+      const extraCharge = extraHours * hourlyRate;
+
+      const newExpectedEndTime = new Date(activeLog.expectedEndTime.getTime() + extraMs);
+      const newEndTime = new Date(booking.endTime.getTime() + extraMs);
+      const newRemainingMs = newExpectedEndTime.getTime() - now.getTime();
+
       await tx.checkInLog.update({
         where: { id: activeLog.id },
         data: { expectedEndTime: newExpectedEndTime },
       });
 
-      return tx.booking.update({
+      const updated = await tx.booking.update({
         where: { id: booking.id },
         data: {
           endTime: newEndTime,
@@ -73,16 +90,21 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
         },
         include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
       });
+
+      return { updated, extraHours, extraCharge, newRemainingMs };
     });
 
     return NextResponse.json({
-      booking: serializeBooking(updated),
-      extraHours,
-      extraCharge,
-      remainingMs: newRemainingMs,
-      message: `تم تجديد الحجز بساعة إضافية${extraHours > 1 ? ` (${extraHours} ساعات)` : ""} — التكلفة الإضافية ${extraCharge} ر.س`,
+      booking: serializeBooking(result.updated),
+      extraHours: result.extraHours,
+      extraCharge: result.extraCharge,
+      remainingMs: result.newRemainingMs,
+      message: `تم تجديد الحجز بساعة إضافية${result.extraHours > 1 ? ` (${result.extraHours} ساعات)` : ""} — التكلفة الإضافية ${result.extraCharge} ر.س`,
     });
   } catch (error) {
+    if (error instanceof ExtendStateError) {
+      return NextResponse.json({ error: error.message }, { status: 422 });
+    }
     return handleApiError(error);
   }
 }

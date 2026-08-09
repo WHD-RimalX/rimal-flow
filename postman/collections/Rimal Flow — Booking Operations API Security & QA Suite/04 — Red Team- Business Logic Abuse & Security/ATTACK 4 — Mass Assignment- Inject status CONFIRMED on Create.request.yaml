@@ -1,0 +1,55 @@
+$kind: http-request
+name: "ATTACK 4 — Mass Assignment: Inject status CONFIRMED on Create"
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "spaceId": "{{space_id}}",
+      "startDate": "{{mass_start}}",
+      "endDate": "{{mass_end}}",
+      "startTime": "09:00",
+      "endTime": "10:00",
+      "bookingType": "hourly",
+      "status": "CONFIRMED"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 192 * 60 * 60 * 1000);
+      start.setUTCHours(9, 0, 0, 0);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      pm.variables.set('mass_start', start.toISOString());
+      pm.variables.set('mass_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Request completes without a server error', function () {
+          pm.expect(pm.response.code).to.be.below(500);
+      });
+
+      if ([200, 201].includes(pm.response.code)) {
+          const body = pm.response.json();
+
+          pm.test('CRITICAL: injected status was IGNORED — server forces PENDING', function () {
+              pm.expect(body.status).to.eql('PENDING');
+          });
+
+          pm.test('CRITICAL: booking was NOT auto-confirmed by client payload', function () {
+              pm.expect(body.status).to.not.eql('CONFIRMED');
+          });
+
+          if (typeof body.id === 'string') {
+              pm.collectionVariables.set('injection_booking_id', body.id);
+          }
+      } else {
+          pm.test('Unknown/forbidden field was rejected by strict validation (400/422)', function () {
+              pm.expect([400, 422]).to.include(pm.response.code);
+          });
+      }
+    language: text/javascript
+order: 4000

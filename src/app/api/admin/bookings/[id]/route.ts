@@ -5,11 +5,20 @@ import { handleApiError } from "@/lib/api-response";
 import { requireStaffSession } from "@/lib/session";
 import { assertPermission } from "@/lib/rbac";
 import { serializeBooking } from "@/lib/serialize-booking";
+import { applyAdminTransition } from "@/lib/booking-state-machine";
 
 /**
  * تحويل حالة الحجز (تأكيد/عدم حضور/انصراف/إلغاء) و/أو تخصيص مقعده — لموظفي رمال
  * فلو فقط (عقد التكامل §10: هذا هو المسار الإداري المنفصل عن PATCH /api/bookings/:id
  * العام الذي يقتصر الآن على تخصيص المقعد فقط دون تغيير الحالة).
+ *
+ * SECURITY-AUDIT.md §3 (FLOW-C03): كان أي موظف يقدر يضبط أي status بصرف النظر
+ * عن الحالة الحالية (PENDING → CHECKED_OUT مباشرة بلا حضور فعلي، أو إحياء حجز
+ * منتهٍ CANCELLED/NO_SHOW/REJECTED → CONFIRMED). كل تحويل الآن يمر عبر آلة الحالة
+ * المركزية (src/lib/booking-state-machine.ts): يتحقق من صحة الانتقال، يطبّقه
+ * بكتابة ذرية مشروطة بالحالة المتوقَّعة، ويسجّله في سجل تدقيق ثابت. CHECKED_IN/
+ * CHECKED_OUT مُستبعَدان عمداً من هذا المسار — يمران فقط عبر محرك الحضور
+ * (checkin-core.ts) الذي يُنشئ سجلات CheckInLog المرافقة الضرورية.
  */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -17,24 +26,40 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const body = await req.json();
     const data = updateBookingStatusSchema.parse({ ...body, bookingId: params.id });
 
-    const booking = await prisma.booking.findUnique({ where: { id: params.id } });
-    if (!booking) {
-      return NextResponse.json({ error: "الحجز غير موجود" }, { status: 404 });
+    if (data.status === "CHECKED_IN" || data.status === "CHECKED_OUT") {
+      return NextResponse.json(
+        { error: "لا يمكن ضبط هذه الحالة مباشرة — استخدم محرك تسجيل الحضور (/api/checkin)" },
+        { status: 400 }
+      );
     }
 
     if (data.status === "CANCELLED" || data.status === "REJECTED") {
       assertPermission(session.user, "canCancelBooking");
     }
 
+    let updated = await prisma.booking.findUnique({ where: { id: params.id }, include: { space: true } });
+    if (!updated) {
+      return NextResponse.json({ error: "الحجز غير موجود" }, { status: 404 });
+    }
+
+    if (data.status) {
+      updated = await applyAdminTransition({
+        bookingId: params.id,
+        toStatus: data.status,
+        actorId: session.user.id,
+        reason: data.reason,
+      });
+    }
+
     if (data.seatIndex !== undefined && data.seatIndex !== null) {
       const seatTaken = await prisma.booking.findFirst({
         where: {
-          id: { not: booking.id },
-          spaceId: booking.spaceId,
+          id: { not: updated.id },
+          spaceId: updated.spaceId,
           seatIndex: data.seatIndex,
           status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
-          startTime: { lt: booking.endTime },
-          endTime: { gt: booking.startTime },
+          startTime: { lt: updated.endTime },
+          endTime: { gt: updated.startTime },
         },
       });
       if (seatTaken) {
@@ -42,18 +67,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
     }
 
-    const updated = await prisma.booking.update({
-      where: { id: params.id },
-      data: {
-        ...(data.status ? { status: data.status } : {}),
-        ...(data.seatIndex !== undefined ? { seatIndex: data.seatIndex } : {}),
-        notes:
-          data.reason && data.status
-            ? `${booking.notes ?? ""}\n[${data.status}] ${data.reason}`.trim()
-            : booking.notes,
-      },
-      include: { space: true },
-    });
+    if (data.seatIndex !== undefined) {
+      updated = await prisma.booking.update({
+        where: { id: params.id },
+        data: { seatIndex: data.seatIndex },
+        include: { space: true },
+      });
+    }
 
     return NextResponse.json(serializeBooking(updated));
   } catch (error) {
@@ -75,14 +95,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: "الحجز غير موجود" }, { status: 404 });
     }
 
-    if (booking.status === "CANCELLED") {
-      return NextResponse.json({ error: "هذا الحجز ملغى بالفعل" }, { status: 409 });
-    }
-
-    const updated = await prisma.booking.update({
-      where: { id: params.id },
-      data: { status: "CANCELLED" },
-      include: { space: true },
+    const updated = await applyAdminTransition({
+      bookingId: params.id,
+      toStatus: "CANCELLED",
+      actorId: session.user.id,
     });
 
     return NextResponse.json(serializeBooking(updated));

@@ -2,6 +2,7 @@ import { getServerSession, type Session } from "next-auth";
 import { decode } from "next-auth/jwt";
 import { headers } from "next/headers";
 import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { isStaff } from "@/lib/rbac";
 import { ForbiddenError } from "@/lib/rbac";
 
@@ -67,11 +68,30 @@ export async function requireSession() {
  * توافقاً مع عقد التكامل §10 (401 = لا جلسة إطلاقاً، 403 = جلسة صالحة لكن
  * الدور غير كافٍ): لا جلسة → UnauthorizedError (401)؛ جلسة موجودة لكن الدور
  * ليس موظفاً → ForbiddenError (403)، لا نخلط بينهما كما كان سابقاً.
+ *
+ * SECURITY-AUDIT.md §5 (FLOW-C07/C08): جلسات JWT تحمل الدور والصلاحيات كما كانت
+ * لحظة تسجيل الدخول لمدة تصل 8 ساعات — تعطيل حساب موظف أو تخفيض دوره لا يُبطل
+ * جلسته الحالية فوراً. لذا كل استدعاء لهذه الدالة يعيد قراءة isActive/role/
+ * permissions الفعلية من قاعدة البيانات (وليس فقط الادّعاء المخزَّن في الـ JWT)
+ * قبل الموافقة على أي إجراء إداري — تكلفة قراءة إضافية مقبولة لأنها تقتصر على
+ * المسارات المخصَّصة للموظفين فقط، لا كل طلب في التطبيق.
  */
 export async function requireStaffSession() {
   const session = await requireSession();
-  if (!isStaff(session.user.role)) {
+
+  const current = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { role: true, permissions: true, isActive: true },
+  });
+
+  if (!current || !current.isActive || !isStaff(current.role)) {
     throw new ForbiddenError("هذا الإجراء متاح لموظفي رمال X فقط");
   }
+
+  // نُحدِّث الجلسة بالقيم الفعلية الحالية من قاعدة البيانات — أي مسار يستخدم
+  // session.user.role/permissions بعدها يرى الحقيقة الحالية لا ادّعاء الـ JWT القديم.
+  session.user.role = current.role;
+  session.user.permissions = current.permissions;
+
   return session;
 }

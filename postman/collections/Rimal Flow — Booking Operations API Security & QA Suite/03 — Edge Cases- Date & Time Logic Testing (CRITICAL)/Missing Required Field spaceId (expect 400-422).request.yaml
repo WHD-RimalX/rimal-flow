@@ -1,0 +1,42 @@
+$kind: http-request
+name: Missing Required Field spaceId (expect 400/422)
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "startDate": "{{miss_start}}",
+      "endDate": "{{miss_end}}",
+      "bookingType": "hourly"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 144 * 60 * 60 * 1000);
+      start.setUTCHours(9, 0, 0, 0);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      pm.variables.set('miss_start', start.toISOString());
+      pm.variables.set('miss_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Missing required field is rejected (400/422)', function () {
+          pm.expect([400, 422]).to.include(pm.response.code);
+      });
+
+      pm.test('Validation error is structured', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+          pm.expect(body.error).to.be.a('string');
+      });
+
+      pm.test('No orphan booking created without a space reference', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.not.have.property('id');
+      });
+    language: text/javascript
+order: 6000

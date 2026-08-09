@@ -3,6 +3,7 @@ import { checkInWindow } from "@/lib/pricing";
 import { ARRIVAL_BUFFER_SECONDS, computeRemainingBudgetMs, isResumableBookingType } from "@/lib/attendance";
 import { serializeBooking } from "@/lib/serialize-booking";
 import { getSeatCountForSpace } from "@/lib/floor-map-config";
+import { recordStatusTransition } from "@/lib/booking-state-machine";
 import { addSeconds } from "date-fns";
 import type { Booking, CheckInLog, Space } from "@prisma/client";
 
@@ -28,9 +29,17 @@ async function logFailedAttempt(
  * المحرك المشترك لتسجيل الحضور/الانصراف — يستخدمه كل من `/api/checkin` (مسار
  * الماسح الذاتي عبر QR للعملاء) و`/api/bookings/:id/check-in` (المسار الرسمي
  * حسب عقد التكامل §10، يدعم `idempotencyKey` لمنع إعادة معالجة نفس الحدث عند
- * إعادة الإرسال). القيود الأمنية (نافذة الوصول/الرصيد المتبقي/حالة الحجز) واحدة
- * في الحالتين — الفرق الوحيد بينهما هو شكل تحديد الحجز (bookingCode/qrToken
- * مقابل معرّف الحجز في الـ URL) وحقل idempotencyKey الإضافي.
+ * إعادة الإرسال) و`/api/integrations/attendance-events` (محول الربط الموقَّع).
+ * القيود الأمنية (نافذة الوصول/الرصيد المتبقي/حالة الحجز) واحدة في كل الحالات.
+ *
+ * تصحيح أمني (SECURITY-AUDIT.md §2/§3، FLOW-X01/FLOW-C03): كانت الكتابة النهائية
+ * `update` غير مشروطة بمعرّف الحجز فقط، فخمس طلبات CHECK_IN متزامنة كلها تنجح
+ * وتُنشئ خمسة سجلات حضور ناجحة رغم أن الحالة النهائية للحجز واحدة فقط. الآن كل
+ * كتابة حالة هي `updateMany` بشرط الحالة المتوقَّعة (compare-and-swap) — إن غيّر
+ * طلب متزامن آخر الحالة بين قراءتنا وكتابتنا، count يكون 0 ونرفض صراحة كتعارض
+ * بدل "التحديث الأخير يفوز" بصمت. كذلك أُضيف تحقق صريح من حالة المصدر (CHECK_IN
+ * لا يُقبل إلا من CONFIRMED، أو من CHECKED_OUT فقط للباقات القابلة للاستئناف) —
+ * سابقاً PENDING أو REJECTED كانا يمرّان لو نجح فحص النافذة الزمنية فقط.
  */
 export async function runCheckInAction(params: {
   booking: BookingWithLogs;
@@ -52,14 +61,15 @@ export async function runCheckInAction(params: {
     }
   }
 
-  if (booking.status === "CANCELLED" || booking.status === "NO_SHOW") {
+  if (booking.status === "CANCELLED" || booking.status === "NO_SHOW" || booking.status === "REJECTED") {
     return {
       status: 422,
-      body: { error: "هذا الحجز ملغى أو مسجَّل كعدم حضور — لا يمكن تنفيذ الإجراء" },
+      body: { error: "هذا الحجز ملغى أو مرفوض أو مسجَّل كعدم حضور — لا يمكن تنفيذ الإجراء" },
     };
   }
 
   const now = new Date();
+  const resumable = isResumableBookingType(booking.bookingType);
 
   // ملاحظة: أُزيلت مهلة التهدئة (كانت 3 دقائق) بين تكرار نفس الإجراء عمداً —
   // بطلب صريح لأغراض العرض التوضيحي (السماح بمسح نفس الحساب أكثر من مرة متتالية
@@ -71,14 +81,15 @@ export async function runCheckInAction(params: {
       return { status: 409, body: { error: "تم تسجيل الحضور مسبقاً لهذا الحجز" } };
     }
 
-    // الباقات القصيرة (ساعة/4 ساعات/يومي) غير قابلة للاستئناف — بمجرد تسجيل
-    // الانصراف مرة واحدة يُغلَق الحجز نهائياً (يُؤرشَف)، على عكس الباقات الشهرية
-    // التي يمكن العودة إليها عبر جلسات متعددة حتى نفاد الرصيد الكلي.
-    if (booking.status === "CHECKED_OUT" && !isResumableBookingType(booking.bookingType)) {
-      await logFailedAttempt(booking.id, action, performedById, "الحجز مغلق نهائياً بعد الانصراف (باقة قصيرة غير قابلة للاستئناف)");
+    // حالات المصدر المسموحة لتسجيل الحضور: CONFIRMED (أول حضور)، أو CHECKED_OUT
+    // فقط للباقات القابلة للاستئناف (عودة لجلسة لاحقة ضمن اشتراك شهري). PENDING
+    // (لم يُؤكَّد بعد) وREJECTED مرفوضان صراحة الآن.
+    const validOrigin = booking.status === "CONFIRMED" || (booking.status === "CHECKED_OUT" && resumable);
+    if (!validOrigin) {
+      await logFailedAttempt(booking.id, action, performedById, `محاولة تسجيل حضور من حالة غير صالحة: ${booking.status}`);
       return {
         status: 422,
-        body: { error: "انتهت هذه الجلسة بتسجيل الانصراف — هذا النوع من الحجوزات لا يُستأنف بعد الانصراف" },
+        body: { error: "لا يمكن تسجيل الحضور — الحجز يجب أن يكون مؤكَّداً أولاً (أو منصرفاً لباقة شهرية قابلة للاستئناف)" },
       };
     }
 
@@ -113,63 +124,89 @@ export async function runCheckInAction(params: {
     const actualStartTime = bufferEndsAt;
     const expectedEndTime = new Date(actualStartTime.getTime() + remainingBudgetMs);
 
-    const updatedBooking = await prisma.$transaction(async (tx) => {
-      // تسكين تلقائي فوري على الخريطة عند تسجيل الحضور — بدون أي تدخل يدوي من
-      // الريسبشن ودون أي تأخير: يتم داخل نفس معاملة تسجيل الحضور مباشرة، فيظهر
-      // المقعد مشغولاً فور نجاح العملية. يُطبَّق فقط على المساحات متعددة المقاعد
-      // (مساحة العمل المشتركة/الثنائية) وفقط إن لم يكن الحجز مخصَّصاً لمقعد أصلاً.
-      let seatIndex = booking.seatIndex;
-      if (seatIndex === null) {
-        const totalSeats = getSeatCountForSpace(booking.space.slug);
-        if (totalSeats !== null) {
-          const takenBookings = await tx.booking.findMany({
-            where: {
-              spaceId: booking.spaceId,
-              id: { not: booking.id },
-              seatIndex: { not: null },
-              status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
-              startTime: { lt: booking.endTime },
-              endTime: { gt: booking.startTime },
-            },
-            select: { seatIndex: true },
-          });
-          const taken = new Set(takenBookings.map((b) => b.seatIndex));
-          for (let i = 0; i < totalSeats; i++) {
-            if (!taken.has(i)) {
-              seatIndex = i;
-              break;
+    try {
+      const updatedBooking = await prisma.$transaction(async (tx) => {
+        // تسكين تلقائي فوري على الخريطة عند تسجيل الحضور — بدون أي تدخل يدوي من
+        // الريسبشن ودون أي تأخير: يتم داخل نفس معاملة تسجيل الحضور مباشرة، فيظهر
+        // المقعد مشغولاً فور نجاح العملية. يُطبَّق فقط على المساحات متعددة المقاعد
+        // (مساحة العمل المشتركة/الثنائية) وفقط إن لم يكن الحجز مخصَّصاً لمقعد أصلاً.
+        let seatIndex = booking.seatIndex;
+        if (seatIndex === null) {
+          const totalSeats = getSeatCountForSpace(booking.space.slug);
+          if (totalSeats !== null) {
+            const takenBookings = await tx.booking.findMany({
+              where: {
+                spaceId: booking.spaceId,
+                id: { not: booking.id },
+                seatIndex: { not: null },
+                status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
+                startTime: { lt: booking.endTime },
+                endTime: { gt: booking.startTime },
+              },
+              select: { seatIndex: true },
+            });
+            const taken = new Set(takenBookings.map((b) => b.seatIndex));
+            for (let i = 0; i < totalSeats; i++) {
+              if (!taken.has(i)) {
+                seatIndex = i;
+                break;
+              }
             }
           }
         }
-      }
 
-      await tx.checkInLog.create({
-        data: {
+        // كتابة الحالة الذرية: compare-and-swap بشرط أن تكون الحالة الحالية لا تزال
+        // كما رأيناها (booking.status) — يمنع نجاح طلبات متزامنة متعددة معاً.
+        const moved = await tx.booking.updateMany({
+          where: { id: booking.id, status: booking.status },
+          data: { status: "CHECKED_IN", ...(seatIndex !== booking.seatIndex ? { seatIndex } : {}) },
+        });
+        if (moved.count !== 1) {
+          throw new StaleStateError();
+        }
+
+        await tx.checkInLog.create({
+          data: {
+            bookingId: booking.id,
+            action: "CHECK_IN",
+            performedById,
+            success: true,
+            bufferEndsAt,
+            actualStartTime,
+            expectedEndTime,
+            idempotencyKey,
+          },
+        });
+
+        await recordStatusTransition({
+          tx,
           bookingId: booking.id,
-          action: "CHECK_IN",
-          performedById,
-          success: true,
-          bufferEndsAt,
-          actualStartTime,
-          expectedEndTime,
-          idempotencyKey,
+          fromStatus: booking.status,
+          toStatus: "CHECKED_IN",
+          actorId: performedById,
+          actorLabel: performedById ? undefined : "SELF_SERVICE_QR",
+        });
+
+        return tx.booking.findUniqueOrThrow({
+          where: { id: booking.id },
+          include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
+        });
+      });
+
+      return {
+        status: 200,
+        body: {
+          booking: serializeBooking(updatedBooking),
+          message: `تم تسجيل الحضور بنجاح — مهلة الوصول للمقعد ${ARRIVAL_BUFFER_SECONDS} ثانية قبل بدء احتساب الوقت`,
         },
-      });
-
-      return tx.booking.update({
-        where: { id: booking.id },
-        data: { status: "CHECKED_IN", ...(seatIndex !== booking.seatIndex ? { seatIndex } : {}) },
-        include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
-      });
-    });
-
-    return {
-      status: 200,
-      body: {
-        booking: serializeBooking(updatedBooking),
-        message: `تم تسجيل الحضور بنجاح — مهلة الوصول للمقعد ${ARRIVAL_BUFFER_SECONDS} ثانية قبل بدء احتساب الوقت`,
-      },
-    };
+      };
+    } catch (error) {
+      if (error instanceof StaleStateError) {
+        await logFailedAttempt(booking.id, action, performedById, "تعارض تزامن: تغيّرت حالة الحجز أثناء المعالجة");
+        return { status: 409, body: { error: "تعارض: تغيّرت حالة الحجز أثناء المعالجة — أعد المحاولة" } };
+      }
+      throw error;
+    }
   }
 
   // action === CHECK_OUT
@@ -181,18 +218,46 @@ export async function runCheckInAction(params: {
   // الباقات القصيرة تُغلَق نهائياً عند الانصراف — يتحرر مقعدها تلقائياً على
   // الخريطة فوراً بما إنها لن تُستأنف أبداً. الباقات الشهرية تبقي مقعدها محجوزاً
   // بين الجلسات (الموظف يقدر يحرره يدوياً من لوحة إدارة المقعد إن احتاج).
-  const shouldFreeSeat = !isResumableBookingType(booking.bookingType) && booking.seatIndex !== null;
+  const shouldFreeSeat = !resumable && booking.seatIndex !== null;
 
-  const [, updatedBooking] = await prisma.$transaction([
-    prisma.checkInLog.create({
-      data: { bookingId: booking.id, action: "CHECK_OUT", performedById, success: true, idempotencyKey },
-    }),
-    prisma.booking.update({
-      where: { id: booking.id },
-      data: { status: "CHECKED_OUT", ...(shouldFreeSeat ? { seatIndex: null } : {}) },
-      include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
-    }),
-  ]);
+  try {
+    const updatedBooking = await prisma.$transaction(async (tx) => {
+      const moved = await tx.booking.updateMany({
+        where: { id: booking.id, status: "CHECKED_IN" },
+        data: { status: "CHECKED_OUT", ...(shouldFreeSeat ? { seatIndex: null } : {}) },
+      });
+      if (moved.count !== 1) {
+        throw new StaleStateError();
+      }
 
-  return { status: 200, body: { booking: serializeBooking(updatedBooking), message: "تم تسجيل الانصراف بنجاح" } };
+      await tx.checkInLog.create({
+        data: { bookingId: booking.id, action: "CHECK_OUT", performedById, success: true, idempotencyKey },
+      });
+
+      await recordStatusTransition({
+        tx,
+        bookingId: booking.id,
+        fromStatus: "CHECKED_IN",
+        toStatus: "CHECKED_OUT",
+        actorId: performedById,
+        actorLabel: performedById ? undefined : "SELF_SERVICE_QR",
+      });
+
+      return tx.booking.findUniqueOrThrow({
+        where: { id: booking.id },
+        include: { space: true, checkInLogs: { orderBy: { timestamp: "desc" }, take: 10 } },
+      });
+    });
+
+    return { status: 200, body: { booking: serializeBooking(updatedBooking), message: "تم تسجيل الانصراف بنجاح" } };
+  } catch (error) {
+    if (error instanceof StaleStateError) {
+      await logFailedAttempt(booking.id, action, performedById, "تعارض تزامن: تغيّرت حالة الحجز أثناء المعالجة");
+      return { status: 409, body: { error: "تعارض: تغيّرت حالة الحجز أثناء المعالجة — أعد المحاولة" } };
+    }
+    throw error;
+  }
 }
+
+/** استثناء داخلي فقط: يُرمى ويُلتقَط ضمن نفس الدالة عند فشل compare-and-swap — ليس جزءاً من واجهة الخطأ العامة. */
+class StaleStateError extends Error {}

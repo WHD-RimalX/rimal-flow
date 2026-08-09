@@ -38,3 +38,6 @@ prisma/dev.db
 
 # local agent/session state (not part of the project)
 .claude/
+
+.vercel
+.env*

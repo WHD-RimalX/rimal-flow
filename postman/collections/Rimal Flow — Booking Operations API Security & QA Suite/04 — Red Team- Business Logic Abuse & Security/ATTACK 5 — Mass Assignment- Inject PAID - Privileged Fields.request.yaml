@@ -1,0 +1,68 @@
+$kind: http-request
+name: "ATTACK 5 — Mass Assignment: Inject PAID / Privileged Fields"
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "id": "attacker-controlled-id",
+      "spaceId": "{{space_id}}",
+      "startDate": "{{paid_start}}",
+      "endDate": "{{paid_end}}",
+      "startTime": "16:00",
+      "endTime": "17:00",
+      "bookingType": "hourly",
+      "status": "PAID",
+      "paymentStatus": "PAID",
+      "totalPrice": 0,
+      "isAdmin": true
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() + 216 * 60 * 60 * 1000);
+      start.setUTCHours(16, 0, 0, 0);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      pm.variables.set('paid_start', start.toISOString());
+      pm.variables.set('paid_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Request completes without a server error', function () {
+          pm.expect(pm.response.code).to.be.below(500);
+      });
+
+      if ([200, 201].includes(pm.response.code)) {
+          const body = pm.response.json();
+
+          pm.test('CRITICAL: operational status forced to PENDING regardless of payload', function () {
+              pm.expect(body.status).to.eql('PENDING');
+              pm.expect(body.status).to.not.eql('PAID');
+          });
+
+          pm.test('CRITICAL: payment state was not set by the client', function () {
+              if (Object.prototype.hasOwnProperty.call(body, 'paymentStatus')) {
+                  pm.expect(body.paymentStatus).to.not.eql('PAID');
+              }
+          });
+
+          pm.test('CRITICAL: client-supplied price was not trusted', function () {
+              if (Object.prototype.hasOwnProperty.call(body, 'totalPrice')) {
+                  pm.expect(body.totalPrice).to.not.eql(0);
+              }
+          });
+
+          pm.test('Server-controlled id was not overridden by the payload', function () {
+              pm.expect(body.id).to.not.eql('attacker-controlled-id');
+          });
+      } else {
+          pm.test('Privileged field injection rejected by strict validation (400/422)', function () {
+              pm.expect([400, 422]).to.include(pm.response.code);
+          });
+      }
+    language: text/javascript
+order: 5000

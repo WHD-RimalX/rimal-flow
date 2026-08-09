@@ -7,11 +7,13 @@ import { useNow } from "@/lib/hooks/useNow";
 import {
   DISPLAY_STATUS_COLORS,
   DISPLAY_STATUS_LABELS,
+  cancellationReasonText,
   deriveDisplayStatus,
   type DisplayStatus,
 } from "@/lib/attendance";
-import { BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
-import type { BookingDTO, SpaceDTO } from "@/types";
+import { ALLOWED_ADMIN_TRANSITIONS } from "@/lib/booking-transitions";
+import { BOOKING_TYPE_LABELS, BOOKING_STATUS_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
+import type { BookingDTO, BookingStatus, SpaceDTO } from "@/types";
 
 const PAGE_SIZE = 10;
 
@@ -26,30 +28,18 @@ const DISPLAY_FILTERS: { id: "ALL" | DisplayStatus; label: string }[] = [
   { id: "REJECTED", label: DISPLAY_STATUS_LABELS.REJECTED },
 ];
 
-/** الحالات القابلة للتعديل يدوياً بحرية عبر هذه القائمة — تحويل مباشر بين أي منها. */
-const EDITABLE_STATUSES = [
-  { value: "PENDING", label: "قيد الانتظار" },
-  { value: "CONFIRMED", label: "تأكيد" },
-  { value: "REJECTED", label: "رفض" },
-  { value: "CANCELLED", label: "إلغاء" },
-];
-
 /**
- * الحالات الخام التي يمكن للإداري تحويل الحجز إليها يدوياً، حسب حالته الحالية.
- * الحجوزات ضمن EDITABLE_STATUSES قابلة للتنقل الحر بينها كلها (بانتظار/تأكيد/
- * رفض/إلغاء). CHECKED_IN يُسمح فقط بإلغائه (تجاوزاً) — لا يجوز إعادته لبانتظار
- * أو تأكيد لأن ذلك يفقد سجلات الحضور الفعلية (bufferEndsAt/expectedEndTime).
- * CHECKED_OUT وNO_SHOW حالات نهائية ناتجة عن تدفّق فعلي (حضور/تسوية تلقائية)
- * ولا تُعدَّل يدوياً من هنا.
+ * الحالات الخام التي يمكن للإداري تحويل الحجز إليها يدوياً، حسب حالته الحالية —
+ * مُشتقَّة من آلة الحالة المركزية (src/lib/booking-transitions.ts)، نفس المصدر
+ * الذي يفرضه السيرفر فعلياً في PATCH /api/admin/bookings/:id (يرفض أي انتقال
+ * خارجها بـ409). لم تعد القائمة "تنقّلاً حراً" بين كل الحالات — كانت هذه ثغرة
+ * (SECURITY-AUDIT.md §3، FLOW-C03): مثلاً CONFIRMED → PENDING كانت تتيح "التراجع"
+ * عن حجز مؤكَّد، وإحياء حجز ملغى/مرفوض/فائت لم يعد ممكناً إطلاقاً (حالات نهائية).
  */
-function nextStatusOptions(rawStatus: string): { value: string; label: string }[] {
-  if (EDITABLE_STATUSES.some((s) => s.value === rawStatus)) {
-    return EDITABLE_STATUSES.filter((s) => s.value !== rawStatus);
-  }
-  if (rawStatus === "CHECKED_IN") {
-    return [{ value: "CANCELLED", label: "إلغاء" }];
-  }
-  return [];
+function nextStatusOptions(rawStatus: BookingStatus): { value: BookingStatus; label: string }[] {
+  const allowed = ALLOWED_ADMIN_TRANSITIONS[rawStatus];
+  if (!allowed) return [];
+  return Array.from(allowed).map((status) => ({ value: status, label: BOOKING_STATUS_LABELS[status] }));
 }
 
 /**
@@ -222,7 +212,10 @@ export function AllBookingsLog() {
                     <td className="py-2.5 text-xs text-gray-600">{BOOKING_TYPE_LABELS[booking.bookingType]}</td>
                     <td className="py-2.5 font-semibold">{formatSAR(Number(booking.finalPrice))}</td>
                     <td className="py-2.5">
-                      <span className={`badge ${DISPLAY_STATUS_COLORS[displayStatus]}`}>
+                      <span
+                        className={`badge ${DISPLAY_STATUS_COLORS[displayStatus]}`}
+                        title={displayStatus === "CANCELLED" ? cancellationReasonText(booking.notes) : undefined}
+                      >
                         {DISPLAY_STATUS_LABELS[displayStatus]}
                       </span>
                     </td>

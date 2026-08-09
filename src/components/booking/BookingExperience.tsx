@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_TYPE_LABELS, formatSAR } from "@/lib/utils";
@@ -17,44 +17,59 @@ import type { BookingDTO, BookingType, SpaceDTO } from "@/types";
 
 type MainTab = "spaces" | "memberships";
 
-// المساحات هنا تُحجز فقط بالساعة/4 ساعات/يومي — العضويات الشهرية (MONTHLY_MORNING/
-// EVENING) لم تعد تُعرَض من تبويب "المساحات" في الصفحة الرئيسية؛ صارت لها بطاقات
-// عضوية عامة مستقلة (MembershipPlans) غير مرتبطة بمساحة بعينها. النوعان يبقيان
-// متاحين للموظفين من صفحة "الزائرين" الإدارية عند الحاجة.
-const SPACE_TYPES: BookingType[] = ["HOURLY", "FOUR_HOUR", "DAILY"];
+// باقة "4 ساعات" الثابتة أُزيلت لصالح باقة الساعة المرنة (1-10 ساعات عبر
+// HourStepper) بدلاً منها. الاشتراك الشهري (صباحي/مسائي) عاد متاحاً من هنا
+// أيضاً وليس فقط كبطاقات عرض عامة (MembershipPlans) — لأنه فعلياً باقة حقيقية
+// لمساحات معينة (كالمساحة المشتركة) ولها سعر وتوقيت محدَّدان في بيانات المساحة.
+const SPACE_TYPES: BookingType[] = ["HOURLY", "DAILY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
 
 /** أوصاف إضافية لكل نوع حجز — تُعرض تحت السعر عند اختيار النوع. */
 const BOOKING_TYPE_HINTS: Partial<Record<BookingType, string>> = {
   DAILY: "10 ساعات — من بداية الدوام حتى نهايته، لنفس اليوم",
+  MONTHLY_MORNING: "الفترة الصباحية: 8:00 صباحاً – 4:00 عصراً، يومياً لمدة 30 يوماً",
+  MONTHLY_EVENING: "الفترة المسائية: 4:00 عصراً – 11:00 مساءً، يومياً لمدة 30 يوماً",
 };
 
-type Step = 1 | 2 | 3 | 4;
+const arabicDateOnlyFormatter = new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium" });
+
+function formatDateOnly(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return arabicDateOnlyFormatter.format(new Date(y, m - 1, d));
+}
+
+/** يضيف عدد أيام لتاريخ (YYYY-MM-DD) ويعيده بنفس الصيغة — لحساب تاريخ نهاية الاشتراك الشهري تلقائياً. */
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  return toDateInputValue(date);
+}
+
+/** مدة الاشتراك الشهري بالأيام — نفس القيمة المستخدمة في computeEndTime على السيرفر (src/lib/pricing.ts). */
+const MONTHLY_SUBSCRIPTION_DAYS = 30;
+
+type Step = 1 | 2 | 3;
 
 const STEP_LABELS: Record<Step, string> = {
   1: "المساحة",
   2: "نوع الحجز",
   3: "التفاصيل",
-  4: "التأكيد",
 };
 
-function StepBreadcrumb({ step, maxReached }: { step: Step; maxReached: Step }) {
+function StepBreadcrumb({ step }: { step: Step }) {
   return (
     <div className="mb-6 flex items-center gap-2 text-xs">
-      {([1, 2, 3, 4] as Step[]).map((s, i) => (
+      {([1, 2, 3] as Step[]).map((s, i) => (
         <div key={s} className="flex items-center gap-2">
           <span
             className={`flex h-6 w-6 items-center justify-center rounded-full font-bold ${
-              s === step
-                ? "bg-rimal-purple text-white"
-                : s < maxReached || s < step
-                ? "bg-rimal-purple-50 text-rimal-purple"
-                : "bg-gray-100 text-gray-400"
+              s === step ? "bg-rimal-purple text-white" : s < step ? "bg-rimal-purple-50 text-rimal-purple" : "bg-gray-100 text-gray-400"
             }`}
           >
             {s}
           </span>
           <span className={s === step ? "font-bold text-gray-800" : "text-gray-400"}>{STEP_LABELS[s]}</span>
-          {i < 3 && <span className="mx-1 text-gray-300">←</span>}
+          {i < 2 && <span className="mx-1 text-gray-300">←</span>}
         </div>
       ))}
     </div>
@@ -64,14 +79,19 @@ function StepBreadcrumb({ step, maxReached }: { step: Step; maxReached: Step }) 
 export function BookingExperience() {
   const { data: session } = useSession();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [spaces, setSpaces] = useState<SpaceDTO[]>([]);
   const [loadingSpaces, setLoadingSpaces] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [mainTab, setMainTab] = useState<MainTab>("spaces");
-  const [step, setStep] = useState<Step>(1);
-  const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
-  const [bookingType, setBookingType] = useState<BookingType | null>(null);
+  // حالة الخطوة/المساحة/النوع مُشتَقة بالكامل من رابط الصفحة (بدل useState محلي)
+  // حتى يعمل زرّا الرجوع والتقدّم في المتصفح طبيعياً بين خطوات الحجز — كل انتقال
+  // خطوة يدفع (push) رابطاً جديداً، فيتصرف تماماً كالتنقّل بين صفحات عادية.
+  const mainTab: MainTab = searchParams.get("tab") === "memberships" ? "memberships" : "spaces";
+  const selectedSpaceId = searchParams.get("space");
+  const bookingType = searchParams.get("type") as BookingType | null;
+  const step: Step = bookingType ? 3 : selectedSpaceId ? 2 : 1;
+
   const [durationHours, setDurationHours] = useState(1);
   const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(new Date()));
   const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
@@ -102,10 +122,9 @@ export function BookingExperience() {
     [selectedSpace]
   );
 
-  const needsTimeSlot = bookingType === "HOURLY" || bookingType === "FOUR_HOUR";
+  const isMonthly = bookingType === "MONTHLY_MORNING" || bookingType === "MONTHLY_EVENING";
+  const needsTimeSlot = bookingType === "HOURLY";
   const studentEligible = selectedSpace ? Number(selectedSpace.studentDiscount) > 0 : false;
-
-  const requiredDurationMinutes = bookingType === "HOURLY" ? durationHours * 60 : bookingType === "FOUR_HOUR" ? 240 : 60;
 
   const previewBase =
     selectedSpace && bookingType
@@ -133,23 +152,32 @@ export function BookingExperience() {
     action();
   }
 
+  function setMainTab(tab: MainTab) {
+    router.push(tab === "spaces" ? "/" : "/?tab=memberships");
+  }
+
   function pickSpace(spaceId: string) {
     requireLoginOrProceed(() => {
-      setSelectedSpaceId(spaceId);
-      setBookingType(null);
       setSelectedSlotIso(null);
       setError(null);
-      setStep(2);
+      router.push(`/?tab=${mainTab}&space=${encodeURIComponent(spaceId)}`);
     });
   }
 
   function pickType(type: BookingType) {
-    setBookingType(type);
     setDurationHours(1);
     setSelectedSlotIso(null);
     setSelectedDate(toDateInputValue(new Date()));
     setError(null);
-    setStep(3);
+    router.push(`/?tab=${mainTab}&space=${encodeURIComponent(selectedSpaceId ?? "")}&type=${encodeURIComponent(type)}`);
+  }
+
+  function goToStep1() {
+    router.push(mainTab === "spaces" ? "/" : "/?tab=memberships");
+  }
+
+  function goToStep2() {
+    router.push(`/?tab=${mainTab}&space=${encodeURIComponent(selectedSpaceId ?? "")}`);
   }
 
   async function handleConfirm() {
@@ -171,7 +199,6 @@ export function BookingExperience() {
         }),
       });
       setResult(booking);
-      setStep(4);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "حدث خطأ غير متوقع أثناء إنشاء الحجز");
     } finally {
@@ -180,17 +207,14 @@ export function BookingExperience() {
   }
 
   function startOver() {
-    setStep(1);
-    setSelectedSpaceId(null);
-    setBookingType(null);
-    setSelectedSlotIso(null);
     setResult(null);
     setError(null);
     setCustomerSelection(null);
+    router.push("/");
   }
 
-  // ---------- الخطوة 4: نتيجة الحجز ----------
-  if (step === 4 && result) {
+  // ---------- نتيجة الحجز (شاشة عابرة فوق أي خطوة، لا تُسجَّل في الرابط) ----------
+  if (result) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-8">
         <div className="card mx-auto max-w-lg text-center">
@@ -259,18 +283,14 @@ export function BookingExperience() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      <StepBreadcrumb step={step} maxReached={step} />
+      <StepBreadcrumb step={step} />
 
       {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
 
       {/* ---------- الخطوة 2: نوع الحجز ---------- */}
       {step === 2 && selectedSpace && (
         <div>
-          <button
-            type="button"
-            onClick={() => setStep(1)}
-            className="mb-3 text-xs font-semibold text-gray-400 hover:text-rimal-purple"
-          >
+          <button type="button" onClick={goToStep1} className="mb-3 text-xs font-semibold text-gray-400 hover:text-rimal-purple">
             → تغيير المساحة
           </button>
           <h3 className="mb-3 text-sm font-bold text-gray-700">
@@ -291,9 +311,7 @@ export function BookingExperience() {
                     {type === "HOURLY" && <span className="text-[10px] font-normal text-gray-400"> /ساعة</span>}
                   </span>
                 </div>
-                {BOOKING_TYPE_HINTS[type] && (
-                  <p className="mt-1 text-xs text-gray-500">{BOOKING_TYPE_HINTS[type]}</p>
-                )}
+                {BOOKING_TYPE_HINTS[type] && <p className="mt-1 text-xs text-gray-500">{BOOKING_TYPE_HINTS[type]}</p>}
               </button>
             ))}
           </div>
@@ -304,11 +322,7 @@ export function BookingExperience() {
       {step === 3 && selectedSpace && bookingType && (
         <div className="grid gap-6 lg:grid-cols-5">
           <div className="lg:col-span-3">
-            <button
-              type="button"
-              onClick={() => setStep(2)}
-              className="mb-3 text-xs font-semibold text-gray-400 hover:text-rimal-purple"
-            >
+            <button type="button" onClick={goToStep2} className="mb-3 text-xs font-semibold text-gray-400 hover:text-rimal-purple">
               → تغيير نوع الحجز
             </button>
             <h3 className="mb-1 text-sm font-bold text-gray-700">
@@ -320,7 +334,7 @@ export function BookingExperience() {
 
             {isStaff && (
               <div className="mb-4">
-                <CustomerPicker onChange={setCustomerSelection} />
+                <CustomerPicker allowSelf={false} onChange={setCustomerSelection} />
               </div>
             )}
 
@@ -337,7 +351,7 @@ export function BookingExperience() {
               </div>
             )}
 
-            <label className="label-field">التاريخ</label>
+            <label className="label-field">{isMonthly ? "تاريخ بداية الاشتراك" : "التاريخ"}</label>
             <input
               type="date"
               className="input-field max-w-xs"
@@ -350,6 +364,16 @@ export function BookingExperience() {
               required
             />
 
+            {isMonthly && selectedDate && (
+              <p className="mt-2 text-xs text-gray-500">
+                من <span className="font-semibold text-gray-700">{formatDateOnly(selectedDate)}</span> إلى{" "}
+                <span className="font-semibold text-gray-700">
+                  {formatDateOnly(addDaysToDateStr(selectedDate, MONTHLY_SUBSCRIPTION_DAYS))}
+                </span>{" "}
+                ({MONTHLY_SUBSCRIPTION_DAYS} يوماً)
+              </p>
+            )}
+
             {needsTimeSlot && (
               <div className="mt-3">
                 <label className="label-field">وقت البداية</label>
@@ -358,7 +382,7 @@ export function BookingExperience() {
                   date={selectedDate}
                   value={selectedSlotIso}
                   onChange={setSelectedSlotIso}
-                  durationMinutes={requiredDurationMinutes}
+                  durationMinutes={durationHours * 60}
                 />
                 <p className="mt-1 text-xs text-gray-400">
                   الحجز متاح يومياً من الساعة 9 صباحاً، وآخر موعد لبدء الحجز الساعة 9 مساءً (يُغلق المكان الساعة 10 مساءً).

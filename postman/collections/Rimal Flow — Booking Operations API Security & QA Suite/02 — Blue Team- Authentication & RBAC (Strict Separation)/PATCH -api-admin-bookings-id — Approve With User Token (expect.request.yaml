@@ -1,0 +1,31 @@
+$kind: http-request
+name: PATCH /api/admin/bookings/:id — Approve With User Token (expect 403)
+url: "{{base_url}}/api/admin/bookings/{{booking_id}}"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "status": "CONFIRMED"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Privilege escalation blocked with 403 Forbidden', function () {
+          pm.expect(pm.response.code).to.eql(403);
+      });
+
+      pm.test('403 is NOT 401 (token valid, permission denied)', function () {
+          pm.expect(pm.response.code).to.not.eql(401);
+      });
+
+      pm.test('Forbidden response returns no mutated booking record', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+          pm.expect(body).to.not.have.property('status');
+      });
+    language: text/javascript
+order: 3000

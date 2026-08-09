@@ -1,0 +1,50 @@
+$kind: http-request
+name: Past Date Booking (expect 400/422)
+url: "{{base_url}}/api/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{user_token}}
+body:
+  type: text
+  content: |-
+    {
+      "spaceId": "{{space_id}}",
+      "startDate": "{{past_start}}",
+      "endDate": "{{past_end}}",
+      "startTime": "09:00",
+      "endTime": "12:00",
+      "bookingType": "hourly"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      start.setUTCHours(9, 0, 0, 0);
+      const end = new Date(start.getTime() + 3 * 60 * 60 * 1000);
+      pm.variables.set('past_start', start.toISOString());
+      pm.variables.set('past_end', end.toISOString());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Past-dated booking is rejected (400/422)', function () {
+          pm.expect([400, 422]).to.include(pm.response.code);
+      });
+
+      pm.test('CRITICAL: time travel is not permitted (no 201)', function () {
+          pm.expect([200, 201]).to.not.include(pm.response.code);
+      });
+
+      pm.test('Structured, human-readable validation error returned', function () {
+          const body = pm.response.json();
+          pm.expect(body).to.have.property('error');
+          pm.expect(body.error).to.be.a('string').and.to.have.length.above(0);
+      });
+
+      pm.test('No stack trace or ORM internals leaked', function () {
+          const raw = pm.response.text();
+          pm.expect(raw).to.not.include('at Object.');
+          pm.expect(raw.toLowerCase()).to.not.include('prisma.');
+      });
+    language: text/javascript
+order: 1000

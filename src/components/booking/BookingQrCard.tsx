@@ -4,6 +4,7 @@ import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useNow } from "@/lib/hooks/useNow";
 import {
+  cancellationReasonText,
   computeLiveState,
   computeRemainingBudgetMs,
   findActiveCheckInLog,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/attendance";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
+import { MonthlyArrivalPreview } from "@/components/booking/MonthlyArrivalPreview";
 import type { BookingDTO } from "@/types";
 
 /** يعرض حالة الوقت الحية لحجز العميل: بانتظار الوصول / عدّاد تنازلي / تجاوز / رصيد متبقٍ بعد الانصراف. */
@@ -54,7 +56,11 @@ function LiveTimerLine({ booking, now }: { booking: BookingDTO; now: number }) {
   }
 
   if (booking.status === "CANCELLED") {
-    return <p className="text-sm font-bold text-gray-400">تم إلغاء هذا الحجز</p>;
+    return <p className="text-sm font-bold text-gray-400">{cancellationReasonText(booking.notes)}</p>;
+  }
+
+  if (booking.status === "REJECTED") {
+    return <p className="text-sm font-bold text-gray-400">تم رفض هذا الحجز من قِبل الإدارة</p>;
   }
 
   return null;
@@ -127,6 +133,8 @@ export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO
       <div className="mt-3 border-t border-gray-100 pt-3">
         <LiveTimerLine booking={booking} now={now} />
       </div>
+
+      {resumable && !isClosed && <MonthlyArrivalPreview spaceId={booking.spaceId} bookingType={booking.bookingType} />}
 
       <OvertimeRenewalBanner booking={booking} now={now} onRenewed={setBooking} />
 
