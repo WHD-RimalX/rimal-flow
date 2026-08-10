@@ -41,10 +41,36 @@ async function getBearerSession(): Promise<Session | null> {
   }
 }
 
+/**
+ * SECURITY-AUDIT(V2).md §5 (FLOW-C07/C08): إعادة التحقق من isActive/role/
+ * permissions من قاعدة البيانات كانت مقتصرة على requireStaffSession() فقط —
+ * أي مسار "مختلط" (عميل عادي أو موظف على نفس المسار، مثل POST /api/bookings
+ * أو GET /api/bookings أو /api/bookings/:id/check-in) كان يستخدم getAuthSession()
+ * مباشرة ويثق بادّعاء الـ JWT المخبَّأ لغاية 8 ساعات — حساب مُعطَّل أو مخفَّض
+ * الصلاحية يبقى فعّالاً على هذه المسارات تحديداً رغم إصلاح المسارات الإدارية
+ * البحتة. الحل: إعادة التحقق تتم هنا مركزياً، مرة واحدة، لكل استدعاء لـ
+ * getAuthSession() (المصدر الوحيد لأي جلسة في كامل التطبيق) — فيرث كل مسار
+ * يستدعيها (مباشرة أو عبر requireSession/requireStaffSession) البيانات
+ * الحقيقية الحالية تلقائياً، بدل الاعتماد على كل مسار ليتذكّر فعل هذا بنفسه.
+ * حساب مُعطَّل أو محذوف يُعامَل كـ"لا جلسة إطلاقاً" (401) في كل مكان.
+ */
 export async function getAuthSession() {
-  const bearerSession = await getBearerSession();
-  if (bearerSession) return bearerSession;
-  return getServerSession(authOptions);
+  const session = (await getBearerSession()) ?? (await getServerSession(authOptions));
+  if (!session?.user?.id) return session;
+
+  const current = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { role: true, permissions: true, isActive: true },
+  });
+
+  if (!current || !current.isActive) {
+    return null;
+  }
+
+  session.user.role = current.role;
+  session.user.permissions = current.permissions;
+
+  return session;
 }
 
 export class UnauthorizedError extends Error {
@@ -69,29 +95,15 @@ export async function requireSession() {
  * الدور غير كافٍ): لا جلسة → UnauthorizedError (401)؛ جلسة موجودة لكن الدور
  * ليس موظفاً → ForbiddenError (403)، لا نخلط بينهما كما كان سابقاً.
  *
- * SECURITY-AUDIT.md §5 (FLOW-C07/C08): جلسات JWT تحمل الدور والصلاحيات كما كانت
- * لحظة تسجيل الدخول لمدة تصل 8 ساعات — تعطيل حساب موظف أو تخفيض دوره لا يُبطل
- * جلسته الحالية فوراً. لذا كل استدعاء لهذه الدالة يعيد قراءة isActive/role/
- * permissions الفعلية من قاعدة البيانات (وليس فقط الادّعاء المخزَّن في الـ JWT)
- * قبل الموافقة على أي إجراء إداري — تكلفة قراءة إضافية مقبولة لأنها تقتصر على
- * المسارات المخصَّصة للموظفين فقط، لا كل طلب في التطبيق.
+ * إعادة قراءة isActive/role/permissions من قاعدة البيانات تتم الآن مركزياً في
+ * getAuthSession() أعلاه — هذه الدالة تكتفي بفحص أن الدور (الحقيقي الحالي) موظف.
  */
 export async function requireStaffSession() {
   const session = await requireSession();
 
-  const current = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { role: true, permissions: true, isActive: true },
-  });
-
-  if (!current || !current.isActive || !isStaff(current.role)) {
+  if (!isStaff(session.user.role)) {
     throw new ForbiddenError("هذا الإجراء متاح لموظفي رمال X فقط");
   }
-
-  // نُحدِّث الجلسة بالقيم الفعلية الحالية من قاعدة البيانات — أي مسار يستخدم
-  // session.user.role/permissions بعدها يرى الحقيقة الحالية لا ادّعاء الـ JWT القديم.
-  session.user.role = current.role;
-  session.user.permissions = current.permissions;
 
   return session;
 }

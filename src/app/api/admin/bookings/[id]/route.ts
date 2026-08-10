@@ -7,6 +7,8 @@ import { assertPermission } from "@/lib/rbac";
 import { serializeBooking } from "@/lib/serialize-booking";
 import { applyAdminTransition } from "@/lib/booking-state-machine";
 
+class SeatTakenError extends Error {}
+
 /**
  * تحويل حالة الحجز (تأكيد/عدم حضور/انصراف/إلغاء) و/أو تخصيص مقعده — لموظفي رمال
  * فلو فقط (عقد التكامل §10: هذا هو المسار الإداري المنفصل عن PATCH /api/bookings/:id
@@ -47,36 +49,50 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         bookingId: params.id,
         toStatus: data.status,
         actorId: session.user.id,
+        actorLabel: session.user.name ?? session.user.email ?? undefined,
         reason: data.reason,
       });
     }
 
-    if (data.seatIndex !== undefined && data.seatIndex !== null) {
-      const seatTaken = await prisma.booking.findFirst({
-        where: {
-          id: { not: updated.id },
-          spaceId: updated.spaceId,
-          seatIndex: data.seatIndex,
-          status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
-          startTime: { lt: updated.endTime },
-          endTime: { gt: updated.startTime },
-        },
-      });
-      if (seatTaken) {
-        return NextResponse.json({ error: "هذا المقعد مشغول بالفعل بحجز آخر في هذا التوقيت" }, { status: 409 });
-      }
-    }
-
     if (data.seatIndex !== undefined) {
-      updated = await prisma.booking.update({
-        where: { id: params.id },
-        data: { seatIndex: data.seatIndex },
-        include: { space: true },
+      const seatIndex = data.seatIndex;
+      updated = await prisma.$transaction(async (tx) => {
+        // SECURITY-AUDIT(V2).md §1 (FLOW-C04): كان الفحص "findFirst" والكتابة
+        // "update" عمليتين منفصلتين بلا قفل هنا تحديداً (بخلاف مسار PATCH
+        // /api/bookings/:id العام الذي كان مقفولاً بالفعل) — إداريان متزامنان
+        // يقدران يخصّصان نفس المقعد معاً. نفس نمط قفل صف المساحة أولاً قبل
+        // الفحص والكتابة، ضمن نفس المعاملة، لتوحيد ترتيب القفل عبر كل المسارات.
+        if (seatIndex !== null) {
+          await tx.$queryRaw`SELECT "id" FROM "spaces" WHERE "id" = ${updated!.spaceId} FOR UPDATE`;
+
+          const seatTaken = await tx.booking.findFirst({
+            where: {
+              id: { not: updated!.id },
+              spaceId: updated!.spaceId,
+              seatIndex,
+              status: { in: ["PENDING", "CONFIRMED", "CHECKED_IN"] },
+              startTime: { lt: updated!.endTime },
+              endTime: { gt: updated!.startTime },
+            },
+          });
+          if (seatTaken) {
+            throw new SeatTakenError();
+          }
+        }
+
+        return tx.booking.update({
+          where: { id: params.id },
+          data: { seatIndex },
+          include: { space: true },
+        });
       });
     }
 
     return NextResponse.json(serializeBooking(updated));
   } catch (error) {
+    if (error instanceof SeatTakenError) {
+      return NextResponse.json({ error: "هذا المقعد مشغول بالفعل بحجز آخر في هذا التوقيت" }, { status: 409 });
+    }
     return handleApiError(error);
   }
 }
@@ -99,6 +115,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       bookingId: params.id,
       toStatus: "CANCELLED",
       actorId: session.user.id,
+      actorLabel: session.user.name ?? session.user.email ?? undefined,
     });
 
     return NextResponse.json(serializeBooking(updated));

@@ -115,7 +115,15 @@ export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO
   const now = useNow(1000);
 
   const resumable = isResumableBookingType(booking.bookingType);
-  const isClosed = booking.status === "CANCELLED" || booking.status === "NO_SHOW" || (booking.status === "CHECKED_OUT" && !resumable);
+  // ملاحظة: REJECTED كانت مفقودة من هذا الشرط — حجز مرفوض من الإدارة كان لا يزال
+  // يعرض زر "عرض رمز QR" وتعليمات إبرازه للاستقبال، رغم أن الخادم يرفض أي محاولة
+  // تسجيل حضور عليه أصلاً (checkin-core.ts). خطأ عرض مضلِّل فقط، وليس ثغرة فعلية
+  // (الحجب الحقيقي يتم في الخادم)، لكنه يوحي للعميل بأن حجزه لا يزال صالحاً.
+  const isClosed =
+    booking.status === "CANCELLED" ||
+    booking.status === "NO_SHOW" ||
+    booking.status === "REJECTED" ||
+    (booking.status === "CHECKED_OUT" && !resumable);
 
   return (
     <div className="card">

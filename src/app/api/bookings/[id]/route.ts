@@ -147,6 +147,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
         fromStatus: booking.status,
         toStatus: "CANCELLED",
         actorId: session.user.id,
+        actorLabel: session.user.name ?? session.user.email ?? undefined,
         reason: "إلغاء ذاتي من العميل",
       });
 

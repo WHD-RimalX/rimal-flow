@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
       booking,
       action: data.action,
       performedById: session.user.id,
+      performedByLabel: session.user.name ?? session.user.email ?? undefined,
     });
 
     return NextResponse.json(result.body, { status: result.status });

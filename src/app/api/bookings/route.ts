@@ -150,6 +150,7 @@ export async function POST(req: NextRequest) {
           fromStatus: null,
           toStatus: "PENDING",
           actorId: session.user.id,
+          actorLabel: session.user.name ?? session.user.email ?? undefined,
         });
 
         return created;
@@ -219,11 +220,43 @@ export async function GET(req: NextRequest) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 10;
 
+    // SECURITY-AUDIT.md §5 (FLOW-C07/C08): قوائم الحجوزات الجماعية كانت تُعيد
+    // qrToken الدائم لكل حجز لكل موظف — موظف استقبال يتصفّح قائمة اليوم يقدر
+    // ينسخ رمز عميل لم يحضر بعد ويستخدمه بنفسه. نحجب الرمز من القوائم الجماعية
+    // لدور RECEPTION تحديداً (ADMIN/SUPER_ADMIN يبقيان لأغراض الإشراف والتدقيق،
+    // والعميل نفسه يرى رمزه الخاص دائماً لأن هذا المسار يعرض حجوزاته هو فقط).
+    //
+    // SECURITY-AUDIT(V2).md §5 (FLOW-C07/C08): حجب الحقل بعد الجلب (JS) كان كافياً
+    // لمنع تسربه في الاستجابة، لكن التدقيق يطلب صراحةً ألا يُجلَب من قاعدة البيانات
+    // أصلاً لهذا الدور — دفاع بعمق إضافي. الآن `select` صريح بدل `include` الشامل،
+    // فحقل qrToken لا يدخل حتى ذاكرة السيرفر لدور RECEPTION.
+    const omitQrToken = staff && session.user.role === "RECEPTION";
+
     const [total, bookings] = await Promise.all([
       prisma.booking.count({ where }),
       prisma.booking.findMany({
         where,
-        include: {
+        select: {
+          id: true,
+          bookingCode: true,
+          ...(omitQrToken ? {} : { qrToken: true }),
+          userId: true,
+          guestName: true,
+          guestPhone: true,
+          guestEmail: true,
+          spaceId: true,
+          seatIndex: true,
+          bookingType: true,
+          startTime: true,
+          endTime: true,
+          isStudent: true,
+          basePrice: true,
+          discountAmount: true,
+          finalPrice: true,
+          status: true,
+          notes: true,
+          createdAt: true,
+          updatedAt: true,
           space: true,
           user: { select: { id: true, name: true, phone: true, email: true } },
           checkInLogs: { orderBy: { timestamp: "desc" }, take: 5 },
@@ -232,13 +265,6 @@ export async function GET(req: NextRequest) {
         ...(paginate ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
       }),
     ]);
-
-    // SECURITY-AUDIT.md §5 (FLOW-C07/C08): قوائم الحجوزات الجماعية كانت تُعيد
-    // qrToken الدائم لكل حجز لكل موظف — موظف استقبال يتصفّح قائمة اليوم يقدر
-    // ينسخ رمز عميل لم يحضر بعد ويستخدمه بنفسه. نحجب الرمز من القوائم الجماعية
-    // لدور RECEPTION تحديداً (ADMIN/SUPER_ADMIN يبقيان لأغراض الإشراف والتدقيق،
-    // والعميل نفسه يرى رمزه الخاص دائماً لأن هذا المسار يعرض حجوزاته هو فقط).
-    const omitQrToken = staff && session.user.role === "RECEPTION";
 
     return NextResponse.json({
       bookings: bookings.map((b) => serializeBooking(b, { omitQrToken })),

@@ -71,10 +71,11 @@ export async function recordStatusTransition({
 export async function applyAdminTransition(params: {
   bookingId: string;
   toStatus: BookingStatus;
-  actorId: string;
+  actorId?: string | null;
+  actorLabel?: string;
   reason?: string | null;
 }) {
-  const { bookingId, toStatus, actorId, reason } = params;
+  const { bookingId, toStatus, actorId, actorLabel, reason } = params;
 
   return prisma.$transaction(async (tx) => {
     const booking = await tx.booking.findUnique({ where: { id: bookingId } });
@@ -103,6 +104,7 @@ export async function applyAdminTransition(params: {
       fromStatus: booking.status,
       toStatus,
       actorId,
+      actorLabel,
       reason,
     });
 

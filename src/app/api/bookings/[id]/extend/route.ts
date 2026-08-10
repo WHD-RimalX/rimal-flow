@@ -4,6 +4,7 @@ import { handleApiError } from "@/lib/api-response";
 import { requireSession } from "@/lib/session";
 import { isResumableBookingType } from "@/lib/attendance";
 import { serializeBooking } from "@/lib/serialize-booking";
+import { assertNoBookingConflict, ConflictError } from "@/lib/availability";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -24,15 +25,24 @@ class ExtendStateError extends Error {
  * SECURITY-AUDIT.md §1 (FLOW-C04): كانت القراءة (وقت التجاوز الحالي) والكتابة
  * (الرسم والتمديد) منفصلتين بلا قفل — تمديدان متزامنان يحسبان نفس وقت التجاوز
  * فيمدّان لنفس الوقت الجديد لكن كل منهما يزيد السعر مرة، فيُحاسَب العميل مرتين
- * عن تمديد فعلي واحد. الآن كل العملية (القراءة والحساب والكتابة) داخل معاملة
- * تقفل صف الحجز أولاً بـ`SELECT ... FOR UPDATE`، فيُسلسِل أي تمديد متزامن آخر
- * لنفس الحجز خلفه بدل تشغيلهما معاً على لقطة بيانات قديمة.
+ * عن تمديد فعلي واحد.
+ *
+ * SECURITY-AUDIT(V2).md §1 (FLOW-C04): قفل صف "الحجز" وحده كان يمنع ازدواج
+ * الرسم على نفس الحجز، لكنه لا يمنع تمديد هذا الحجز إلى فترة تتعارض فعلياً مع
+ * حجز آخر موجود لنفس المساحة (لا فحص تعارض إطلاقاً بعد التمديد). الآن يُقفل
+ * صف "المساحة" أولاً (نفس ترتيب القفل الموحَّد في كل مسارات الحجز الأخرى)، ثم
+ * تُعاد قراءة الحجز طازجة ضمن نفس المعاملة، ثم يُعاد فحص التعارض على الفترة
+ * الجديدة الممدَّدة كاملة (بدون هذا الحجز نفسه) قبل الكتابة — تمديدان متزامنان
+ * لنفس الحجز يتسلسلان تلقائياً لأن كليهما يقفلان نفس صف المساحة أولاً.
  */
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const session = await requireSession();
 
-    const bookingOwner = await prisma.booking.findUnique({ where: { id: params.id }, select: { userId: true } });
+    const bookingOwner = await prisma.booking.findUnique({
+      where: { id: params.id },
+      select: { userId: true, spaceId: true },
+    });
     if (!bookingOwner) {
       return NextResponse.json({ error: "الحجز غير موجود" }, { status: 404 });
     }
@@ -41,7 +51,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "bookings" WHERE "id" = ${params.id} FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "spaces" WHERE "id" = ${bookingOwner.spaceId} FOR UPDATE`;
 
       const booking = await tx.booking.findUniqueOrThrow({
         where: { id: params.id },
@@ -75,6 +85,10 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       const newExpectedEndTime = new Date(activeLog.expectedEndTime.getTime() + extraMs);
       const newEndTime = new Date(booking.endTime.getTime() + extraMs);
       const newRemainingMs = newExpectedEndTime.getTime() - now.getTime();
+
+      // إعادة فحص التعارض على الفترة الجديدة الممدَّدة كاملة (باستثناء هذا الحجز
+      // نفسه) الآن وصف المساحة مقفول — يمنع تمديد حجز إلى فترة يشغلها حجز آخر.
+      await assertNoBookingConflict(booking.space, booking.startTime, newEndTime, booking.id, tx);
 
       await tx.checkInLog.update({
         where: { id: activeLog.id },

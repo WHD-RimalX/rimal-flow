@@ -51,6 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       booking,
       action: data.action,
       performedById: session.user.id,
+      performedByLabel: session.user.name ?? session.user.email ?? undefined,
       idempotencyKey: data.idempotencyKey,
     });
 

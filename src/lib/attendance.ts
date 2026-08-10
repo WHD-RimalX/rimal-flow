@@ -150,7 +150,7 @@ export const AUTO_CANCEL_NOTE_MARKER = "[AUTO_CANCEL_NO_CONFIRM]";
 
 /** سبب إلغاء واضح للعميل والموظف: تلقائي لعدم التأكيد، أو يدوي من الإدارة. */
 export function cancellationReasonText(notes: string | null | undefined): string {
-  if (notes?.startsWith(AUTO_CANCEL_NOTE_MARKER)) {
+  if (notes?.includes(AUTO_CANCEL_NOTE_MARKER)) {
     return "أُلغي الحجز تلقائياً لعدم تأكيده خلال 5 دقائق من إنشائه";
   }
   return "تم إلغاء هذا الحجز من قِبل الإدارة";
