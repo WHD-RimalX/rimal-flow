@@ -5,17 +5,23 @@ import { runCheckInAction } from "@/lib/checkin-core";
 import { handleApiError } from "@/lib/api-response";
 import { requireStaffSession } from "@/lib/session";
 import { assertPermission } from "@/lib/rbac";
+import { consumeScanToken, ScanTokenError } from "@/lib/scan-token";
+import { deriveNextCheckAction } from "@/lib/attendance";
 
 /**
- * محرك تسجيل الحضور/الانصراف — رمال فلو (مسار ماسح الاستقبال، لموظفي رمال فلو
- * فقط الآن). كل حجز له رمز QR خاص به (`qrToken`) يصل إليه العميل من حسابه؛
- * الماسح يبحث عن الحجز بهذا الرمز مباشرة (أو بكود الحجز يدوياً إن تعطّلت
- * الكاميرا). القيود الأمنية الفعلية (تهدئة/نافذة وصول/رصيد متبقٍ) موثَّقة
- * ومطبَّقة في `src/lib/checkin-core.ts` المشترك مع `/api/bookings/:id/check-in`.
+ * محرك تسجيل الحضور/الانصراف — مسار ماسح الاستقبال (لموظفي رمال فلو فقط).
  *
- * SECURITY-AUDIT.md §5 (FLOW-C07/C08): كان requireStaffSession وحده كافياً —
- * موظف مُهيَّأ صراحةً بـ`canCheckIn:false` (تخصيص فردي فوق دوره الافتراضي) كان
- * يقدر يسجّل حضوراً/انصرافاً رغم ذلك. الآن يُفرض canCheckIn/canCheckOut فعلياً.
+ * مسار المسح (scanToken): الرمز مؤقت ومتجدد في شاشة العميل، يُستهلَك ذرياً عند
+ * أول مسح، و**الإجراء يُستنتَج من حالة الحجز على الخادم** لا من جسم الطلب:
+ * أول مسح للجلسة = تسجيل دخول، والمسح التالي = تسجيل خروج (أو إيقاف مؤقت
+ * للعدّاد في الباقات الشهرية القابلة للاستئناف). بهذا يستحيل على أي طرف أن
+ * يفرض ترتيباً مخالفاً أو يكرر نفس الإجراء.
+ *
+ * مسار الإدخال اليدوي (bookingCode): للحالات التي لا كاميرا فيها أو ضيف بلا
+ * تطبيق — الموظف يتحقق من الهوية شخصياً ويحدد الإجراء صراحةً.
+ *
+ * SECURITY-AUDIT.md §5 (FLOW-C07/C08): يُفرض canCheckIn/canCheckOut فعلياً على
+ * الإجراء الناتج مهما كان مصدره.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -23,26 +29,58 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const data = checkInRequestSchema.parse(body);
 
-    assertPermission(session.user, data.action === "CHECK_IN" ? "canCheckIn" : "canCheckOut");
+    let bookingId: string;
+    let action: "CHECK_IN" | "CHECK_OUT";
 
-    const booking = await prisma.booking.findUnique({
-      where: data.qrToken ? { qrToken: data.qrToken } : { bookingCode: data.bookingCode! },
+    if (data.scanToken) {
+      // نستهلك الرمز أولاً (ذرياً) — أي إعادة إرسال لنفس الرمز بعد هذه اللحظة
+      // تُرفض، حتى لو فشل الإجراء نفسه لاحقاً لسبب عملي (خارج النافذة الزمنية...).
+      bookingId = await consumeScanToken(data.scanToken);
+
+      const current = await prisma.booking.findUniqueOrThrow({
+        where: { id: bookingId },
+        select: { status: true, bookingType: true },
+      });
+
+      const nextAction = deriveNextCheckAction(current);
+      if (!nextAction) {
+        return NextResponse.json(
+          { error: "لا يوجد إجراء متاح لهذا الحجز في حالته الحالية" },
+          { status: 422 }
+        );
+      }
+      action = nextAction;
+    } else {
+      const found = await prisma.booking.findUnique({
+        where: { bookingCode: data.bookingCode! },
+        select: { id: true },
+      });
+      if (!found) {
+        return NextResponse.json({ error: "لم يتم العثور على حجز بهذا الكود" }, { status: 404 });
+      }
+      bookingId = found.id;
+      action = data.action!;
+    }
+
+    assertPermission(session.user, action === "CHECK_IN" ? "canCheckIn" : "canCheckOut");
+
+    const booking = await prisma.booking.findUniqueOrThrow({
+      where: { id: bookingId },
       include: { checkInLogs: { orderBy: { timestamp: "desc" } }, space: true },
     });
 
-    if (!booking) {
-      return NextResponse.json({ error: "لم يتم العثور على حجز بهذا الرمز" }, { status: 404 });
-    }
-
     const result = await runCheckInAction({
       booking,
-      action: data.action,
+      action,
       performedById: session.user.id,
       performedByLabel: session.user.name ?? session.user.email ?? undefined,
     });
 
-    return NextResponse.json(result.body, { status: result.status });
+    return NextResponse.json({ ...result.body, action }, { status: result.status });
   } catch (error) {
+    if (error instanceof ScanTokenError) {
+      return NextResponse.json({ error: error.message }, { status: 401 });
+    }
     return handleApiError(error);
   }
 }

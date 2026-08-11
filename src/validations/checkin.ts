@@ -3,20 +3,32 @@ import { z } from "zod";
 export const checkActionEnum = z.enum(["CHECK_IN", "CHECK_OUT"]);
 
 /**
- * كل حجز له رمز QR خاص به (`Booking.qrToken`) يُنشَأ تلقائياً ويصل إليه العميل
- * من حسابه — يحل محل رمز QR الثابت الواحد الذي كان يُستخدَم لكل العملاء سابقاً.
- * مسح رمز حجز فعلي يُرسِل `qrToken`؛ إدخال يدوي من الاستقبال (بدون كاميرا) يُرسِل
- * `bookingCode` مباشرة دون الحاجة لأي QR (الموظف يتحقق من الهوية شخصياً).
+ * مساران لتسجيل الحضور/الانصراف من شاشة الاستقبال:
+ *
+ * 1) مسح رمز QR المتجدد (`scanToken`) — الطريق الافتراضي. الرمز مؤقت (ثوانٍ)،
+ *    يُستهلَك عند أول مسح، و**الإجراء لا يُرسَل من العميل إطلاقاً**: الخادم هو من
+ *    يستنتجه من حالة الحجز الحالية (أول مسح = دخول، والمسح التالي = خروج). هذا
+ *    يمنع أي تلاعب بترتيب الجلسة من طرف المستدعي.
+ * 2) إدخال يدوي بكود الحجز (`bookingCode`) عند تعطّل الكاميرا أو لضيف بلا تطبيق —
+ *    هنا يُحدَّد الإجراء صراحةً لأن الموظف يتحقق من الهوية شخصياً.
+ *
+ * رمز `qrToken` الثابت لم يعد مقبولاً لتسجيل الحضور (كان صالحاً للأبد فينتحل به
+ * أي شخص يملك لقطة شاشة قديمة) — راجع src/lib/scan-token.ts.
  */
 export const checkInRequestSchema = z
   .object({
-    qrToken: z.string().trim().min(1).optional(),
+    scanToken: z.string().trim().min(1).optional(),
     bookingCode: z.string().trim().min(1).optional(),
-    action: checkActionEnum,
+    // مطلوب فقط مع المسار اليدوي؛ يُتجاهَل تماماً مع scanToken.
+    action: checkActionEnum.optional(),
   })
-  .refine((data) => Boolean(data.qrToken || data.bookingCode), {
-    message: "يجب توفير رمز QR الخاص بالحجز أو كود الحجز يدوياً",
-    path: ["qrToken"],
+  .refine((data) => Boolean(data.scanToken || data.bookingCode), {
+    message: "يجب مسح رمز QR الخاص بالحجز أو إدخال كود الحجز يدوياً",
+    path: ["scanToken"],
+  })
+  .refine((data) => Boolean(data.scanToken) || Boolean(data.action), {
+    message: "يجب تحديد الإجراء (دخول/خروج) عند الإدخال اليدوي",
+    path: ["action"],
   });
 
 export type CheckInRequestInput = z.infer<typeof checkInRequestSchema>;

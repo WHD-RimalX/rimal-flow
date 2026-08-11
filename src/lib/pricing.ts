@@ -1,5 +1,6 @@
 import { BookingType, Space } from "@prisma/client";
 import { addDays, addHours, addMinutes } from "date-fns";
+import { businessWindowFor, riyadhDayName, riyadhHourOnSameDay } from "@/lib/business-hours";
 
 /**
  * محرك حساب الأسعار — يعمل حصراً على السيرفر.
@@ -16,9 +17,9 @@ export interface PriceBreakdown {
   studentDiscountRate: number;
 }
 
-/** نافذة الدوام الصباحي/المسائي للاشتراكات الشهرية (بالساعة 24). */
-export const MONTHLY_MORNING_WINDOW = { startHour: 8, endHour: 16 };
-export const MONTHLY_EVENING_WINDOW = { startHour: 16, endHour: 23 };
+/** نافذة الدوام الصباحي/المسائي للاشتراكات الشهرية (بالساعة 24): 8ص–3م و3م–10م. */
+export const MONTHLY_MORNING_WINDOW = { startHour: 8, endHour: 15 };
+export const MONTHLY_EVENING_WINDOW = { startHour: 15, endHour: 22 };
 
 /** ساعات الوصول المسموحة قبل/بعد وقت الحجز عند تسجيل الحضور (بالدقائق). */
 export const CHECK_IN_GRACE_MINUTES_BEFORE = 30;
@@ -41,16 +42,23 @@ function unitPriceFor(space: Space, bookingType: BookingType): number | null {
   }
 }
 
-/** يحسب وقت الانتهاء بناءً على نوع الحجز ووقت البدء. `durationHours` (1-3) يُستخدَم فقط مع HOURLY. */
+/** يحسب وقت الانتهاء بناءً على نوع الحجز ووقت البدء. `durationHours` يُستخدَم فقط مع HOURLY. */
 export function computeEndTime(bookingType: BookingType, startTime: Date, durationHours?: number): Date {
   switch (bookingType) {
     case "HOURLY":
       return addHours(startTime, durationHours ?? 1);
     case "FOUR_HOUR":
       return addHours(startTime, 4);
-    case "DAILY":
-      // الباقة اليومية 10 ساعات ضمن نفس اليوم — وليست 24 ساعة كاملة.
-      return addHours(startTime, 10);
+    case "DAILY": {
+      // الباقة اليومية = يوم دوام كامل من الافتتاح حتى الإغلاق، وليست مدة ثابتة:
+      // 14 ساعة (8ص–10م) الأحد–الخميس، و13 ساعة (9ص–10م) السبت. تنتهي دائماً عند
+      // ساعة إغلاق نفس اليوم مهما كانت ساعة البداية المسجَّلة.
+      const window = businessWindowFor(startTime);
+      if (!window) {
+        throw new PricingError(`المقر مغلق يوم ${riyadhDayName(startTime)} — لا يمكن حجز باقة يومية فيه`);
+      }
+      return riyadhHourOnSameDay(startTime, window.closeHour);
+    }
     case "MONTHLY_MORNING":
     case "MONTHLY_EVENING":
       return addDays(startTime, 30);

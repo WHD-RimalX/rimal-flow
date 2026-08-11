@@ -1,14 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { useNow } from "@/lib/hooks/useNow";
+import { RotatingQr } from "@/components/booking/RotatingQr";
 import {
   cancellationReasonText,
   computeLiveState,
   computeRemainingBudgetMs,
+  deriveNextCheckAction,
   findActiveCheckInLog,
   formatDuration,
+  isBookingQrUsable,
   isResumableBookingType,
 } from "@/lib/attendance";
 import { apiFetch, ApiError } from "@/lib/api-client";
@@ -115,15 +117,13 @@ export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO
   const now = useNow(1000);
 
   const resumable = isResumableBookingType(booking.bookingType);
-  // ملاحظة: REJECTED كانت مفقودة من هذا الشرط — حجز مرفوض من الإدارة كان لا يزال
-  // يعرض زر "عرض رمز QR" وتعليمات إبرازه للاستقبال، رغم أن الخادم يرفض أي محاولة
-  // تسجيل حضور عليه أصلاً (checkin-core.ts). خطأ عرض مضلِّل فقط، وليس ثغرة فعلية
-  // (الحجب الحقيقي يتم في الخادم)، لكنه يوحي للعميل بأن حجزه لا يزال صالحاً.
-  const isClosed =
-    booking.status === "CANCELLED" ||
-    booking.status === "NO_SHOW" ||
-    booking.status === "REJECTED" ||
-    (booking.status === "CHECKED_OUT" && !resumable);
+  // صلاحية عرض الرمز تُحسَب من مصدر واحد مشترك (isBookingQrUsable): مشتركو
+  // الباقات الشهرية يحتفظون برمزهم طوال مدة الاشتراك عبر كل جلساتهم، بينما
+  // رمز الحجز اليومي/بالساعة ينتهي بأول انصراف أو بانقضاء يومه أيهما أسبق.
+  const qrUsable = isBookingQrUsable(booking, now);
+  // ما سيفعله المسح القادم — نفس المنطق الذي يطبّقه الخادم بالضبط، فيعرف العميل
+  // مسبقاً إن كان هذا رمز وصول أم مغادرة بدل رمز مبهم واحد للحالتين.
+  const nextAction = deriveNextCheckAction(booking);
 
   return (
     <div className="card">
@@ -142,18 +142,20 @@ export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO
         <LiveTimerLine booking={booking} now={now} />
       </div>
 
-      {resumable && !isClosed && <MonthlyArrivalPreview spaceId={booking.spaceId} bookingType={booking.bookingType} />}
+      {resumable && qrUsable && <MonthlyArrivalPreview spaceId={booking.spaceId} bookingType={booking.bookingType} />}
 
       <OvertimeRenewalBanner booking={booking} now={now} onRenewed={setBooking} />
 
-      {!isClosed && (
+      {qrUsable && (
         <div className="mt-4">
           {showQr ? (
             <div className="flex flex-col items-center gap-3">
-              <div className="rounded-xl border-4 border-rimal-purple/10 bg-white p-3">
-                <QRCodeSVG value={booking.qrToken} size={176} fgColor="#4f3569" level="M" />
-              </div>
-              <p className="text-center text-xs text-gray-500">أظهر هذا الرمز للاستقبال عند الوصول أو المغادرة</p>
+              <RotatingQr bookingId={booking.id} />
+              <p className="text-center text-xs text-gray-500">
+                {nextAction === "CHECK_OUT"
+                  ? "أظهر هذا الرمز للاستقبال لتسجيل المغادرة"
+                  : "أظهر هذا الرمز للاستقبال لتسجيل الوصول"}
+              </p>
               <button
                 type="button"
                 onClick={() => setShowQr(false)}
@@ -164,7 +166,7 @@ export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO
             </div>
           ) : (
             <button type="button" onClick={() => setShowQr(true)} className="btn-primary w-full">
-              عرض رمز QR
+              {nextAction === "CHECK_OUT" ? "عرض رمز المغادرة" : "عرض رمز الوصول"}
             </button>
           )}
         </div>

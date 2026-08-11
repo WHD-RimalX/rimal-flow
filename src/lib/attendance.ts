@@ -53,7 +53,18 @@ export interface CheckInLogLike {
   success: boolean;
 }
 
-const HOUR_MS = 60 * 60 * 1000;
+/** وحدة التقريب الزمني المعتمدة لاحتساب الوقت المستهلك: ربع ساعة. */
+export const BILLING_QUARTER_MS = 15 * 60 * 1000;
+
+/**
+ * يقرّب مدة زمنية لأعلى (Ceiling) لأقرب ربع ساعة — سياسة احتساب الوقت المعتمدة
+ * للعملاء: 26 دقيقة تُحتسب 30، و42 دقيقة تُحتسب 45، وهكذا. مدة صفرية تبقى صفراً
+ * (لا تُحوَّل إلى ربع ساعة) حتى لا تُخصَم دقائق من رصيد جلسة لم تبدأ أصلاً.
+ */
+export function ceilToQuarterHourMs(ms: number): number {
+  if (ms <= 0) return 0;
+  return Math.ceil(ms / BILLING_QUARTER_MS) * BILLING_QUARTER_MS;
+}
 
 /** الباقات القصيرة (ساعة/4 ساعات/يومي) تُغلَق نهائياً بعد استهلاك وقتها أو أول
  *  انصراف — لا رصيد يُستأنف لاحقاً. الباقات الشهرية على النقيض تُستأنف عبر
@@ -66,13 +77,14 @@ export function isResumableBookingType(bookingType: string): boolean {
 /**
  * إجمالي الوقت الفعلي المُستهلَك عبر كل جلسات الحضور المكتملة (CHECK_IN→CHECK_OUT)
  * لهذا الحجز — يُستثنى منه أي جلسة حالية لم تُغلَق بعد (يُحسب لحظياً بشكل منفصل).
- * `roundSessionsToHour`: للباقات الشهرية فقط — كل جلسة مكتملة تُقرَّب لأقرب ساعة
- * كاملة قبل خصمها من الرصيد الكلي (لأن نظام التسعير بالساعة يفرض حداً أدنى ساعة
- * واحدة لكل حجز، فالتسوية بعد كل جلسة تتبع نفس المنطق).
+ * `roundSessionsToQuarterHour`: للباقات الشهرية القابلة للاستئناف — كل جلسة مكتملة
+ * تُقرَّب لأعلى لأقرب ربع ساعة قبل خصمها من الرصيد الكلي (26 دقيقة → 30، و42 → 45)،
+ * فيبدأ عدّاد أي عودة لاحقة من نفس الوقت المقرَّب الذي انتهت عنده الجلسة السابقة
+ * بالضبط، بلا كسور دقائق متراكمة.
  */
 export function computeElapsedActiveMs(
   checkInLogs: CheckInLogLike[] | undefined,
-  options?: { roundSessionsToHour?: boolean }
+  options?: { roundSessionsToQuarterHour?: boolean }
 ): number {
   if (!checkInLogs || checkInLogs.length === 0) return 0;
   const sorted = [...checkInLogs]
@@ -89,8 +101,8 @@ export function computeElapsedActiveMs(
       // فعلياً)، فتكون timestamp < sessionStart ونحصل على مدة سالبة تُضخّم الرصيد المتبقي
       // فوق ما تم دفعه فعلياً لو لم نمنعها.
       let sessionMs = Math.max(0, new Date(log.timestamp).getTime() - sessionStart);
-      if (options?.roundSessionsToHour) {
-        sessionMs = Math.round(sessionMs / HOUR_MS) * HOUR_MS;
+      if (options?.roundSessionsToQuarterHour) {
+        sessionMs = ceilToQuarterHourMs(sessionMs);
       }
       elapsed += sessionMs;
       sessionStart = null;
@@ -120,8 +132,68 @@ export function computeRemainingBudgetMs(booking: {
   }
 
   const totalBudgetMs = new Date(booking.endTime).getTime() - new Date(booking.startTime).getTime();
-  const elapsed = computeElapsedActiveMs(booking.checkInLogs, { roundSessionsToHour: resumable });
+  const elapsed = computeElapsedActiveMs(booking.checkInLogs, { roundSessionsToQuarterHour: resumable });
   return Math.max(0, totalBudgetMs - elapsed);
+}
+
+/**
+ * الإجراء التالي المنطقي لهذا الحجز — المصدر الوحيد لقاعدة "أول مسح = دخول،
+ * والمسح التالي = خروج (أو إيقاف مؤقت للباقات الشهرية)".
+ *
+ * يُستخدَم على الخادم لاستنتاج الإجراء من حالة الحجز بدل قبوله من المستدعي
+ * (فلا يمكن لأحد أن يفرض "خروج" على حجز لم يُسجَّل دخوله، أو يكرر الدخول)،
+ * وعلى الواجهة لعرض ما سيحدث عند المسح. `null` يعني لا إجراء صالح حالياً.
+ *
+ * يطابق تماماً شرط `validOrigin` في src/lib/checkin-core.ts.
+ */
+export function deriveNextCheckAction(booking: {
+  status: string;
+  bookingType: string;
+}): "CHECK_IN" | "CHECK_OUT" | null {
+  if (booking.status === "CHECKED_IN") return "CHECK_OUT";
+  if (booking.status === "CONFIRMED") return "CHECK_IN";
+  // الباقات الشهرية تُستأنف: الانصراف يوقف العدّاد ولا يُنهي الاشتراك.
+  if (booking.status === "CHECKED_OUT" && isResumableBookingType(booking.bookingType)) return "CHECK_IN";
+  return null;
+}
+
+/** بداية اليوم بتوقيت الرياض (UTC+3 ثابت) للحظة معطاة، كطابع زمني UTC. */
+function riyadhDayStartMs(at: number): number {
+  const shifted = new Date(at + 3 * 60 * 60 * 1000);
+  return Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - 3 * 60 * 60 * 1000;
+}
+
+/**
+ * هل ما زال رمز QR الخاص بهذا الحجز صالحاً للعرض/المسح؟
+ *
+ * القاعدة تختلف جذرياً بين نوعَي الحجز:
+ * - الباقات الشهرية (القابلة للاستئناف): الرمز يبقى صالحاً طوال مدة الاشتراك
+ *   كاملة عبر جلسات حضور/انصراف متعددة — تسجيل الانصراف لا يُنهي الاشتراك، فلا
+ *   يجوز إخفاء الرمز بعده. يسقط فقط بانتهاء مدة الاشتراك نفسها (endTime).
+ * - الحجوزات غير المتجددة (ساعة/4 ساعات/يومي): رمز الحجز اليومي صالح ليومه فقط —
+ *   ينتهي بأول انصراف فعلي، أو بانقضاء يوم الحجز نفسه بتوقيت الرياض أيهما أسبق،
+ *   فلا يبقى رمز يوم أمس قابلاً للعرض والمسح اليوم.
+ * الحالات المنتهية (ملغى/مرفوض/عدم حضور) لا رمز لها في كل الأحوال.
+ *
+ * هذا الفحص للعرض فقط — الرفض الفعلي يفرضه الخادم في checkin-core.ts.
+ */
+export function isBookingQrUsable(
+  booking: { status: string; bookingType: string; startTime: string | Date; endTime: string | Date },
+  now: number = Date.now()
+): boolean {
+  if (booking.status === "CANCELLED" || booking.status === "NO_SHOW" || booking.status === "REJECTED") {
+    return false;
+  }
+
+  const endMs = new Date(booking.endTime).getTime();
+
+  if (isResumableBookingType(booking.bookingType)) {
+    return now <= endMs;
+  }
+
+  if (booking.status === "CHECKED_OUT") return false;
+  // ما زال ضمن يوم الحجز نفسه بتوقيت الرياض (أو لم يبدأ بعد).
+  return riyadhDayStartMs(now) <= riyadhDayStartMs(new Date(booking.startTime).getTime());
 }
 
 /** يهيّئ فرق وقت (بالميلي ثانية) كنص mm:ss أو hh:mm:ss. */

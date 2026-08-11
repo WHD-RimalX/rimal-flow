@@ -1,4 +1,12 @@
 import { z } from "zod";
+import {
+  BUSINESS_HOURS_SUMMARY,
+  businessWindowFor,
+  isOnSlotGrid,
+  maxBookableHoursFrom,
+  riyadhDayName,
+  riyadhHourOfDay,
+} from "@/lib/business-hours";
 
 export const bookingTypeEnum = z.enum([
   "HOURLY",
@@ -22,6 +30,14 @@ export type BookingStatusValue = z.infer<typeof bookingStatusEnum>;
 
 /** أعلى عدد ضيوف معقول ضمن حجز واحد — بوابة تحقق أولية قبل أي فحص سعة خاص بالمساحة. */
 const MAX_GUESTS_PER_BOOKING = 50;
+
+/** أطول يوم دوام (14 ساعة، الأحد–الخميس) — السقف المطلق لباقة الساعة. */
+export const MAX_HOURLY_DURATION = 14;
+
+/** مُغلِّف صغير حول isOnSlotGrid ليُستخدَم مباشرة كمُتحقِّق في .refine أدناه. */
+function isOnSlotGridStart(data: { startDate: Date }): boolean {
+  return isOnSlotGrid(data.startDate);
+}
 
 /**
  * مخطط إنشاء حجز جديد.
@@ -50,9 +66,10 @@ export const createBookingSchema = z
     spaceId: z.string().min(1, "يجب اختيار المساحة"),
     bookingType: bookingTypeEnum,
     startDate: z.coerce.date({ errorMap: () => ({ message: "وقت بداية الحجز غير صالح" }) }),
-    // عدد الساعات المطلوبة — يُستخدَم فقط مع bookingType=HOURLY (1-10 ساعات)؛
-    // يُتجاهَل تماماً لبقية الأنواع التي لها مدة ثابتة محسوبة من نوع الباقة نفسه.
-    durationHours: z.coerce.number().int().min(1).max(10).optional(),
+    // عدد الساعات المطلوبة — يُستخدَم فقط مع bookingType=HOURLY (1 حتى طول يوم
+    // الدوام)؛ يُتجاهَل تماماً لبقية الأنواع التي لها مدة محسوبة من نوع الباقة.
+    // السقف الفعلي المرتبط بيوم/وقت البداية يُفرَض في .refine أدناه.
+    durationHours: z.coerce.number().int().min(1).max(MAX_HOURLY_DURATION).optional(),
     // اختياري: للتحقق من صحة النطاق الزمني المُرسَل فقط (endDate > startDate) —
     // لا يُستخدم لحساب مدة الحجز الفعلية أو السعر؛ تلك تبقى محسوبة سيرفرياً من
     // bookingType حصراً حتى لو أرسل العميل نطاقاً زمنياً مختلفاً (دفاع في العمق).
@@ -83,21 +100,43 @@ export const createBookingSchema = z
     message: "لا يمكن إنشاء حجز في وقت ماضٍ",
     path: ["startDate"],
   })
+  .refine((data) => businessWindowFor(data.startDate) !== null, {
+    // الجمعة إجازة أسبوعية كاملة — لا يُقبل أي حجز يبدأ فيها مهما كان نوعه.
+    message: "المقر مغلق يوم الجمعة (إجازة أسبوعية) — اختر يوماً آخر",
+    path: ["startDate"],
+  })
   .refine(
     (data) => {
-      // الاشتراكات الشهرية مستثناة — نافذتها الصباحية تبدأ 8 صباحاً (قبل حد
-      // 9 صباحاً العام)، وهي أصلاً مقيَّدة بنافذتها الخاصة (8ص–4م / 4م–11م)
-      // لا بساعات الدوام العامة المخصَّصة لحجوزات الوصول المباشر (الساعة/4
-      // ساعات/يومي).
-      if (data.bookingType === "MONTHLY_MORNING" || data.bookingType === "MONTHLY_EVENING") return true;
-      // الرياض بتوقيت UTC+3 ثابت (بلا توقيت صيفي) — نحسب الساعة المحلية يدوياً
-      // بدل الاعتماد على منطقة زمنية السيرفر (Vercel يشغّل UTC عادة).
-      // المكان يُغلق الساعة 10 مساءً — آخر موعد يمكن أن يبدأ به حجز هو 9 مساءً.
-      const riyadhHour = (data.startDate.getUTCHours() + 3) % 24;
-      return riyadhHour >= 9 && riyadhHour < 22;
+      // نافذة الدوام تختلف باختلاف اليوم (8ص الأحد–الخميس، 9ص السبت) — تُقرأ من
+      // مصدر الحقيقة الموحَّد business-hours.ts بدل أرقام ثابتة مكرّرة هنا.
+      const window = businessWindowFor(data.startDate);
+      if (!window) return true; // يُغطّيها الفحص السابق برسالته الخاصة
+      const hour = riyadhHourOfDay(data.startDate);
+      return hour >= window.openHour && hour < window.closeHour;
     },
     {
-      message: "الحجز متاح فقط من الساعة 9 صباحاً حتى 10 مساءً بتوقيت الرياض (آخر موعد للحجز 9 مساءً)",
+      message: `وقت البداية خارج ساعات دوام هذا اليوم — ${BUSINESS_HOURS_SUMMARY}`,
+      path: ["startDate"],
+    }
+  )
+  .refine(isOnSlotGridStart, {
+    // نظام الحجز يعمل بفتحات ربع ساعة — أي وقت بداية خارج مضاعفات الـ15 دقيقة
+    // (مثل 9:07) مرفوض على مستوى الخادم أيضاً، لا في منتقي الواجهة فقط، حتى لا
+    // يلتفّ عليه أي استدعاء مباشر للـ API وينشئ حجزاً خارج الشبكة الزمنية.
+    message: "وقت البداية يجب أن يكون على مضاعفات ربع الساعة (00:00 أو 00:15 أو 00:30 أو 00:45)",
+    path: ["startDate"],
+  })
+  .refine(
+    (data) => {
+      // الباقة اليومية = يوم دوام كامل، فبدايتها مثبَّتة على ساعة الافتتاح نفسها
+      // (8ص أو 9ص حسب اليوم) — لا يجوز بدؤها منتصف اليوم وإلا لم تعد "يوماً كاملاً".
+      if (data.bookingType !== "DAILY") return true;
+      const window = businessWindowFor(data.startDate);
+      if (!window) return true;
+      return riyadhHourOfDay(data.startDate) === window.openHour;
+    },
+    {
+      message: "الباقة اليومية تغطي يوم الدوام كاملاً — يجب أن تبدأ عند ساعة افتتاح ذلك اليوم",
       path: ["startDate"],
     }
   )
@@ -107,24 +146,16 @@ export const createBookingSchema = z
   })
   .refine(
     (data) => {
-      // باقة الساعة فقط لها مدة متغيّرة (1-10 ساعات) قد تمتد فعلياً بعد ساعة
-      // الإغلاق حتى لو كانت ساعة البداية صالحة بمفردها — بقية الأنواع (يومي/
-      // شهري) مدتها ثابتة ومضبوطة أصلاً لتبقى ضمن ساعات العمل.
+      // باقة الساعة فقط لها مدة متغيّرة قد تمتد فعلياً بعد ساعة الإغلاق حتى لو
+      // كانت ساعة البداية صالحة بمفردها — بقية الأنواع (يومي/شهري) مدتها محسوبة
+      // سيرفرياً من نوع الباقة ومضبوطة أصلاً لتبقى ضمن ساعات العمل.
+      // السقف هنا هو ما تبقّى فعلياً حتى إغلاق نفس اليوم (14 ساعة كحد أقصى إن
+      // بدأ الحجز عند الافتتاح في يوم عادي، و13 يوم السبت).
       if (data.bookingType !== "HOURLY") return true;
-      const hours = data.durationHours ?? 1;
-      // إزاحة الرياض (UTC+3 ثابت) مطبَّقة يدوياً على كل من البداية والنهاية
-      // لمقارنتهما "بتوقيت الرياض" دون الاعتماد على منطقة زمنية السيرفر.
-      const startRiyadh = new Date(data.startDate.getTime() + 3 * 60 * 60 * 1000);
-      const endRiyadh = new Date(startRiyadh.getTime() + hours * 60 * 60 * 1000);
-      const sameRiyadhDay =
-        startRiyadh.getUTCFullYear() === endRiyadh.getUTCFullYear() &&
-        startRiyadh.getUTCMonth() === endRiyadh.getUTCMonth() &&
-        startRiyadh.getUTCDate() === endRiyadh.getUTCDate();
-      const endMinutesSinceMidnight = endRiyadh.getUTCHours() * 60 + endRiyadh.getUTCMinutes();
-      return sameRiyadhDay && endMinutesSinceMidnight <= 22 * 60;
+      return (data.durationHours ?? 1) <= maxBookableHoursFrom(data.startDate);
     },
     {
-      message: "مدة الحجز تتجاوز وقت إغلاق المكان (10 مساءً بتوقيت الرياض) — اختر عدد ساعات أقل أو وقت بداية أبكر",
+      message: "مدة الحجز تتجاوز وقت إغلاق المقر (10 مساءً) — اختر عدد ساعات أقل أو وقت بداية أبكر",
       path: ["durationHours"],
     }
   )

@@ -19,14 +19,17 @@ function generateBootstrapPassword(devDefault: string): string {
   return isProduction ? crypto.randomBytes(18).toString("base64url") : devDefault;
 }
 
+// ساعات عمل كل يوم بتوقيت الرياض — يجب أن تطابق src/lib/business-hours.ts
+// (مصدر الحقيقة الذي يفرضه الخادم فعلياً عند التحقق من الحجوزات):
+// الأحد–الخميس 8ص–10م (14 ساعة دوام)، السبت 9ص–10م (13 ساعة)، والجمعة إجازة
+// أسبوعية (غيابها من هذه الخريطة يعني "مغلق" في /api/availability).
 const defaultWeeklyAvailability = {
-  sun: { open: "08:00", close: "23:00" },
-  mon: { open: "08:00", close: "23:00" },
-  tue: { open: "08:00", close: "23:00" },
-  wed: { open: "08:00", close: "23:00" },
-  thu: { open: "08:00", close: "23:00" },
-  fri: { open: "14:00", close: "23:00" },
-  sat: { open: "10:00", close: "23:00" },
+  sun: { open: "08:00", close: "22:00" },
+  mon: { open: "08:00", close: "22:00" },
+  tue: { open: "08:00", close: "22:00" },
+  wed: { open: "08:00", close: "22:00" },
+  thu: { open: "08:00", close: "22:00" },
+  sat: { open: "09:00", close: "22:00" },
 };
 
 const spaces = [

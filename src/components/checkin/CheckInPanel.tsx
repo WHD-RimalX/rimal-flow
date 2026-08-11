@@ -21,11 +21,13 @@ type CheckAction = "CHECK_IN" | "CHECK_OUT";
 type ManualMode = "camera" | "code" | "phone";
 
 function ScanStep({
+  onScanToken,
   onLookup,
   loading,
   error,
 }: {
-  onLookup: (params: { qrToken?: string; bookingCode?: string; phone?: string }) => void;
+  onScanToken: (scanToken: string) => void;
+  onLookup: (params: { bookingCode?: string; phone?: string }) => void;
   loading: boolean;
   error: string | null;
 }) {
@@ -37,12 +39,13 @@ function ScanStep({
     <div className="card mx-auto max-w-md">
       <h1 className="text-lg font-extrabold text-gray-900">امسح رمز QR الخاص بحجز العميل</h1>
       <p className="mt-1 text-sm text-gray-500">
-        وجّه الكاميرا نحو رمز QR الظاهر في حساب العميل — الرمز خاص بحجزه هو تحديداً وينتهي بانتهاء حجزه.
+        وجّه الكاميرا نحو الرمز الظاهر في شاشة العميل — رمز مؤقت لمرة واحدة. المسح يُنفّذ الإجراء
+        مباشرة: أول مسح للجلسة تسجيل دخول، والمسح التالي تسجيل خروج.
       </p>
 
       {mode === "camera" && (
         <div className="mt-4">
-          <QrScanner onScan={(value) => onLookup({ qrToken: value })} />
+          <QrScanner onScan={onScanToken} />
           <button
             type="button"
             onClick={() => setMode("code")}
@@ -126,8 +129,34 @@ export function CheckInPanel() {
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<CheckAction | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [scanning, setScanning] = useState(false);
 
-  async function handleLookup(params: { qrToken?: string; bookingCode?: string; phone?: string }) {
+  /**
+   * مسح رمز مؤقت: عملية واحدة تُنفّذ الإجراء مباشرة. لا نستعلم أولاً ثم ننفّذ،
+   * لأن الرمز يُستهلَك مرة واحدة — والإجراء نفسه يستنتجه الخادم من حالة الحجز
+   * (أول مسح دخول، والتالي خروج) فلا يُرسَل من هنا إطلاقاً.
+   */
+  async function handleScanToken(scanToken: string) {
+    if (scanning) return;
+    setScanning(true);
+    setLookupError(null);
+    setMessage(null);
+    try {
+      const res = await apiFetch<{ booking: BookingDTO; message: string; action: CheckAction }>("/api/checkin", {
+        method: "POST",
+        body: JSON.stringify({ scanToken }),
+      });
+      setBooking(res.booking);
+      setMessage({ type: "success", text: res.message });
+    } catch (err) {
+      setLookupError(err instanceof ApiError ? err.message : "تعذّر تنفيذ المسح");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  /** المسار اليدوي (كود حجز أو رقم جوال) — استعلام أولاً ثم اختيار الإجراء صراحةً. */
+  async function handleLookup(params: { bookingCode?: string; phone?: string }) {
     setLookupLoading(true);
     setLookupError(null);
     try {
@@ -151,7 +180,7 @@ export function CheckInPanel() {
     try {
       const res = await apiFetch<{ booking: BookingDTO; message: string }>("/api/checkin", {
         method: "POST",
-        body: JSON.stringify({ qrToken: booking.qrToken, action }),
+        body: JSON.stringify({ bookingCode: booking.bookingCode, action }),
       });
       setBooking(res.booking);
       setMessage({ type: "success", text: res.message });
@@ -169,7 +198,14 @@ export function CheckInPanel() {
   }
 
   if (!booking) {
-    return <ScanStep onLookup={handleLookup} loading={lookupLoading} error={lookupError} />;
+    return (
+      <ScanStep
+        onScanToken={handleScanToken}
+        onLookup={handleLookup}
+        loading={lookupLoading || scanning}
+        error={lookupError}
+      />
+    );
   }
 
   const customerName = booking.user?.name ?? booking.guestName ?? "عميل";

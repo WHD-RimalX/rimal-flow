@@ -10,8 +10,8 @@ interface Slot {
 }
 
 const WINDOW_BY_TYPE: Partial<Record<BookingType, { startHour: number; endHour: number; label: string }>> = {
-  MONTHLY_MORNING: { startHour: 8, endHour: 16, label: "فترتك الصباحية (8:00 ص – 4:00 م)" },
-  MONTHLY_EVENING: { startHour: 16, endHour: 23, label: "فترتك المسائية (4:00 م – 11:00 م)" },
+  MONTHLY_MORNING: { startHour: 8, endHour: 15, label: "فترتك الصباحية (8:00 ص – 3:00 م)" },
+  MONTHLY_EVENING: { startHour: 15, endHour: 22, label: "فترتك المسائية (3:00 م – 10:00 م)" },
 };
 
 function formatRiyadhTime(iso: string): string {

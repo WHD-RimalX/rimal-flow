@@ -3,10 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { QRCodeSVG } from "qrcode.react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_TYPE_LABELS, formatSAR } from "@/lib/utils";
-import { FIXED_START_HOUR, hourLabel, priceForType, riyadhDateToIso, toDateInputValue } from "@/lib/booking-wizard-helpers";
+import {
+  fixedStartHourForDate,
+  hourLabel,
+  maxHourlyDurationForDate,
+  priceForType,
+  riyadhDateToIso,
+  toDateInputValue,
+} from "@/lib/booking-wizard-helpers";
+import { BUSINESS_HOURS_SUMMARY, businessWindowForDateKey } from "@/lib/business-hours";
 import { TimeSlotPicker } from "@/components/booking/TimeSlotPicker";
 import { HourStepper } from "@/components/booking/HourStepper";
 import { CustomerPicker, type CustomerSelection } from "@/components/booking/CustomerPicker";
@@ -138,10 +145,17 @@ export function BookingExperience() {
       : 0;
   const previewFinal = previewBase !== null ? previewBase - previewDiscount : null;
 
+  // يوم الجمعة إجازة كاملة — نمنع اختياره من المصدر بدل تركه يفشل عند الإرسال.
+  const selectedDayWindow = businessWindowForDateKey(selectedDate);
+  const isClosedDay = selectedDayWindow === null;
+  // سقف عدد الساعات = طول يوم الدوام المختار (14 عادةً، 13 السبت).
+  const maxDuration = Math.max(1, maxHourlyDurationForDate(selectedDate));
+
+  const fixedStartHour = bookingType ? fixedStartHourForDate(bookingType, selectedDate) : null;
   const effectiveStartIso = needsTimeSlot
     ? selectedSlotIso
-    : bookingType
-    ? riyadhDateToIso(selectedDate, FIXED_START_HOUR[bookingType] ?? 9)
+    : bookingType && fixedStartHour !== null
+    ? riyadhDateToIso(selectedDate, fixedStartHour)
     : null;
 
   function requireLoginOrProceed(action: () => void) {
@@ -222,7 +236,9 @@ export function BookingExperience() {
             ✓
           </div>
           <h3 className="text-lg font-bold text-gray-900">تم تأكيد حجزك بنجاح</h3>
-          <p className="mt-1 text-sm text-gray-500">احتفظ بكود الحجز ورمز QR — ستجدهما أيضاً في صفحة حجوزاتي</p>
+          <p className="mt-1 text-sm text-gray-500">
+            احتفظ بكود الحجز — ورمز المسح تجده في صفحة حجوزاتي وقت وصولك
+          </p>
 
           <div className="my-4 rounded-xl bg-rimal-purple-50 py-4">
             <p className="text-xs text-gray-500">كود الحجز</p>
@@ -231,11 +247,11 @@ export function BookingExperience() {
             </p>
           </div>
 
-          <div className="mb-4 flex flex-col items-center gap-2">
-            <div className="rounded-xl border-4 border-rimal-purple/10 bg-white p-3">
-              <QRCodeSVG value={result.qrToken} size={176} fgColor="#4f3569" level="M" />
-            </div>
-            <p className="text-center text-xs text-gray-500">أظهر هذا الرمز للاستقبال عند الوصول أو المغادرة</p>
+          <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <p className="text-center text-xs leading-relaxed text-gray-500">
+              رمز المسح مؤقت ويتجدد تلقائياً كل ثوانٍ لحمايتك — افتح صفحة{" "}
+              <span className="font-semibold text-rimal-purple">حجوزاتي</span> عند وصولك للمقر لعرضه.
+            </p>
           </div>
 
           <dl className="grid grid-cols-2 gap-3 text-sm">
@@ -342,12 +358,16 @@ export function BookingExperience() {
               <div className="mb-4 max-w-xs">
                 <label className="label-field">عدد الساعات</label>
                 <HourStepper
-                  value={durationHours}
+                  value={Math.min(durationHours, maxDuration)}
+                  max={maxDuration}
                   onChange={(h) => {
                     setDurationHours(h);
                     setSelectedSlotIso(null);
                   }}
                 />
+                <p className="mt-1 text-[11px] text-gray-400">
+                  حتى {maxDuration} ساعة — طول يوم الدوام في التاريخ المختار.
+                </p>
               </div>
             )}
 
@@ -363,6 +383,12 @@ export function BookingExperience() {
               }}
               required
             />
+            <p className="mt-1 text-[11px] text-gray-400">{BUSINESS_HOURS_SUMMARY}</p>
+            {isClosedDay && (
+              <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs font-semibold text-amber-700">
+                المقر مغلق يوم الجمعة (إجازة أسبوعية) — اختر يوماً آخر.
+              </p>
+            )}
 
             {isMonthly && selectedDate && (
               <p className="mt-2 text-xs text-gray-500">
@@ -385,7 +411,8 @@ export function BookingExperience() {
                   durationMinutes={durationHours * 60}
                 />
                 <p className="mt-1 text-xs text-gray-400">
-                  الحجز متاح يومياً من الساعة 9 صباحاً، وآخر موعد لبدء الحجز الساعة 9 مساءً (يُغلق المكان الساعة 10 مساءً).
+                  فتحات ربع ساعة ضمن دوام اليوم المختار — {BUSINESS_HOURS_SUMMARY}. تُعرض فقط الأوقات التي
+                  تكفي لإتمام المدة المطلوبة قبل الإغلاق.
                 </p>
               </div>
             )}
@@ -447,11 +474,13 @@ export function BookingExperience() {
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={submitting || !session?.user || !effectiveStartIso}
+                disabled={submitting || !session?.user || !effectiveStartIso || isClosedDay}
                 className="btn-accent mt-5 w-full"
               >
                 {!session?.user
                   ? "سجّل الدخول لتأكيد الحجز"
+                  : isClosedDay
+                  ? "المقر مغلق في هذا اليوم"
                   : !effectiveStartIso
                   ? "أكمل اختيار الوقت أولاً"
                   : submitting

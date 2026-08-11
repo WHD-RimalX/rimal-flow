@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
+import { SLOT_GRANULARITY_MINUTES } from "@/lib/business-hours";
 
 interface Slot {
   startTime: string;
@@ -9,6 +10,9 @@ interface Slot {
   isAvailable: boolean;
   reason: "PAST" | "BOOKED" | null;
 }
+
+/** سبب تعطيل الفتحة كما يعرضه المنتقي — يضيف "CLOSING" فوق أسباب الخادم. */
+type SlotBlockReason = Slot["reason"] | "CLOSING";
 
 interface TimeSlotPickerProps {
   spaceId: string | null;
@@ -20,8 +24,6 @@ interface TimeSlotPickerProps {
   durationMinutes?: number;
 }
 
-const SLOT_GRANULARITY_MINUTES = 10;
-
 function formatRiyadhTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("ar-SA", {
     hour: "2-digit",
@@ -32,12 +34,12 @@ function formatRiyadhTime(iso: string): string {
 }
 
 /**
- * منتقي وقت بصري بدقائق مضاعفات العشرة — الفتحات المحجوزة تظهر بلون الخريطة
+ * منتقي وقت بصري بفتحات ربع ساعة (15 دقيقة) — الفتحات المحجوزة تظهر بلون الخريطة
  * الموف الغامق (floor-occupied) ولا يمكن اختيارها، والفتحة المختارة تظهر بلون
  * الخريطة الموف الفاتح (floor-bg) — نفس منطق ألوان الخريطة التفاعلية بالضبط.
- * كل فتحة معطَّلة تحمل سبباً واضحاً (محجوزة / فات وقتها) بدل رفض صامت، وعند
- * تمرير durationMinutes > 10 تُحسَب الإتاحة عبر كل الفتحات المتتالية اللازمة
- * لتغطية كامل مدة الحجز (لا الفتحة الأولى فقط).
+ * كل فتحة معطَّلة تحمل سبباً واضحاً (محجوزة / فات وقتها / لا تكفي قبل الإغلاق)
+ * بدل رفض صامت، وعند تمرير durationMinutes > 15 تُحسَب الإتاحة عبر كل الفتحات
+ * المتتالية اللازمة لتغطية كامل مدة الحجز (لا الفتحة الأولى فقط).
  */
 export function TimeSlotPicker({ spaceId, date, value, onChange, durationMinutes = SLOT_GRANULARITY_MINUTES }: TimeSlotPickerProps) {
   const [slots, setSlots] = useState<Slot[] | null>(null);
@@ -75,9 +77,11 @@ export function TimeSlotPicker({ spaceId, date, value, onChange, durationMinutes
   const requiredSteps = Math.max(1, Math.ceil(durationMinutes / SLOT_GRANULARITY_MINUTES));
 
   /** يتحقق أن الفتحة ومدة الحجز الكاملة بعدها متاحة، ويُرجع أول سبب رفض يواجهه. */
-  function checkCoverage(startIndex: number): { isAvailable: boolean; reason: Slot["reason"] } {
+  function checkCoverage(startIndex: number): { isAvailable: boolean; reason: SlotBlockReason } {
     if (startIndex + requiredSteps > slots!.length) {
-      return { isAvailable: false, reason: "BOOKED" };
+      // لا تتبقّى فتحات كافية قبل الإغلاق لتغطية المدة المطلوبة — سبب مختلف
+      // تماماً عن "محجوز" ويجب ألا يظهر للعميل كأن أحداً حجزها.
+      return { isAvailable: false, reason: "CLOSING" };
     }
     for (let i = startIndex; i < startIndex + requiredSteps; i++) {
       const s = slots![i];
@@ -86,13 +90,28 @@ export function TimeSlotPicker({ spaceId, date, value, onChange, durationMinutes
     return { isAvailable: true, reason: null };
   }
 
+  // الفتحات التي لا يتبقّى بعدها وقت كافٍ قبل الإغلاق تُحذَف من العرض تماماً بدل
+  // إظهارها معطَّلة — لا فائدة من عرض وقت لا يمكن حجزه بأي حال. تتكيّف تلقائياً
+  // مع المدة المختارة: بحجز 3 ساعات تختفي كل فتحة تبدأ بعد 7 مساءً.
+  const selectableSlots = slots
+    .map((slot, index) => ({ slot, coverage: checkCoverage(index) }))
+    .filter(({ coverage }) => coverage.reason !== "CLOSING");
+
+  if (selectableSlots.length === 0) {
+    return (
+      <p className="text-xs text-gray-400">
+        لا تتوفر أوقات كافية لهذه المدة في هذا اليوم — جرّب مدة أقصر أو يوماً آخر.
+      </p>
+    );
+  }
+
   return (
     <div>
       <div className="grid max-h-64 grid-cols-4 gap-1.5 overflow-y-auto rounded-xl bg-gray-50 p-2 sm:grid-cols-6">
-        {slots.map((slot, index) => {
+        {selectableSlots.map(({ slot, coverage }) => {
           const isSelected = value === slot.startTime;
-          const coverage = checkCoverage(index);
-          const reasonLabel = coverage.reason === "PAST" ? "فات الوقت" : coverage.reason === "BOOKED" ? "محجوز" : null;
+          const reasonLabel =
+            coverage.reason === "PAST" ? "فات الوقت" : coverage.reason === "BOOKED" ? "محجوز" : null;
           return (
             <button
               key={slot.startTime}
@@ -102,7 +121,7 @@ export function TimeSlotPicker({ spaceId, date, value, onChange, durationMinutes
                 coverage.reason === "PAST"
                   ? "هذا الوقت فات اليوم"
                   : coverage.reason === "BOOKED"
-                  ? "هذه الفترة محجوزة بالكامل أو لا تكفي للمدة المطلوبة"
+                  ? "هذه الفترة محجوزة بالكامل"
                   : undefined
               }
               onClick={() => onChange(slot.startTime)}
