@@ -1,16 +1,8 @@
 import { prisma } from "@/lib/prisma";
-import { checkInWindow } from "@/lib/pricing";
-import {
-  ARRIVAL_BUFFER_SECONDS,
-  computeRemainingBudgetMs,
-  isResumableBookingType,
-  isWithinPackageWindow,
-  packageWindowLabel,
-} from "@/lib/attendance";
+import { ARRIVAL_BUFFER_SECONDS, computeRemainingBudgetMs, isResumableBookingType } from "@/lib/attendance";
 import { serializeBooking } from "@/lib/serialize-booking";
 import { getSeatCountForSpace } from "@/lib/floor-map-config";
 import { recordStatusTransition } from "@/lib/booking-state-machine";
-import { isAttendanceWindowRelaxed } from "@/lib/test-mode";
 import { addSeconds } from "date-fns";
 import type { Booking, CheckInLog, Prisma, Space } from "@prisma/client";
 
@@ -93,10 +85,14 @@ async function performCheckInAction(tx: Tx, params: RunParams): Promise<CheckInR
     }
   }
 
-  if (booking.status === "CANCELLED" || booking.status === "NO_SHOW" || booking.status === "REJECTED") {
+  // الحجز الملغى أو المرفوض قرار إداري صريح — يبقى الوحيد الذي يمنع الحضور.
+  // "لم يحضر" (NO_SHOW) لم يعد مانعاً: تُسجَّل تلقائياً عند انقضاء وقت الحجز،
+  // فكان وصول العميل متأخراً يعني رفضه نهائياً رغم حضوره فعلاً — والأصح أن
+  // يُقبل حضوره ويُصحَّح السجل.
+  if (booking.status === "CANCELLED" || booking.status === "REJECTED") {
     return {
       status: 422,
-      body: { error: "هذا الحجز ملغى أو مرفوض أو مسجَّل كعدم حضور — لا يمكن تنفيذ الإجراء" },
+      body: { error: "هذا الحجز ملغى أو مرفوض من الإدارة — لا يمكن تنفيذ الإجراء" },
     };
   }
 
@@ -113,66 +109,24 @@ async function performCheckInAction(tx: Tx, params: RunParams): Promise<CheckInR
       return { status: 409, body: { error: "تم تسجيل الحضور مسبقاً لهذا الحجز" } };
     }
 
-    // حالات المصدر المسموحة لتسجيل الحضور: CONFIRMED (أول حضور)، أو CHECKED_OUT
-    // فقط للباقات القابلة للاستئناف (عودة لجلسة لاحقة ضمن اشتراك شهري). PENDING
-    // (لم يُؤكَّد بعد) وREJECTED مرفوضان صراحة الآن.
-    const validOrigin = booking.status === "CONFIRMED" || (booking.status === "CHECKED_OUT" && resumable);
-    if (!validOrigin) {
-      await logFailedAttempt(tx, booking.id, action, performedById, `محاولة تسجيل حضور من حالة غير صالحة: ${booking.status}`);
-      return {
-        status: 422,
-        body: { error: "لا يمكن تسجيل الحضور — الحجز يجب أن يكون مؤكَّداً أولاً (أو منصرفاً لباقة شهرية قابلة للاستئناف)" },
-      };
-    }
+    // تسجيل الحضور مسموح من أي حالة غير نهائية — بطلب صريح: العميل الواقف أمام
+    // الاستقبال يجب أن يدخل، لا أن يُرفض لأن حجزه لم يُؤكَّد بعد أو تأخّر عن موعده.
+    // PENDING (لم يؤكَّد) وNO_SHOW (تأخّر) وCHECKED_OUT (عاد ثانيةً) كلها تُقبل الآن.
+    // القيد الوحيد الباقي هو ترتيب الجلسة نفسه: لا حضور فوق حضور قائم (أُعيد
+    // التحقق منه أعلاه)، ولا انصراف بلا حضور — وبدونه ينكسر تسلسل الدخول/الخروج.
 
-    // وضع التجربة (محلي/Preview فقط، مستحيل تفعيله في الإنتاج) يتخطى القيود
-    // الزمنية وحدها — راجع src/lib/test-mode.ts.
-    const relaxWindows = isAttendanceWindowRelaxed();
+    // القيود الزمنية (نافذة الوصول ±30 دقيقة، ونافذة الباقة اليومية، وانتهاء
+    // صلاحية الحجز) أُزيلت بالكامل بطلب صريح: كانت تمنع الحضور الفعلي في حالات
+    // مشروعة كثيرة (وصول مبكر أو متأخر، اشتراك خارج فترته). ما زالت الأوقات
+    // تُسجَّل بدقة في CheckInLog وتظهر في التقارير — لكنها لم تعد تمنع الدخول.
 
-    if (relaxWindows) {
-      // لا فحص نوافذ زمنية — بقية القيود (الحالة، الرصيد، الذرية) تُطبَّق كالمعتاد.
-    } else if (resumable) {
-      // الاشتراك الشهري: حقّ حضور يومي متجدد طوال مدة الاشتراك — لا "موعد" واحد.
-      // القيدان الوحيدان: ألا يكون الاشتراك قد انتهى، وأن يكون الوقت الحالي ضمن
-      // فترة الباقة اليومية (صباحية/مسائية). سابقاً كان يُطبَّق عليه قيد "±30 دقيقة
-      // حول وقت البدء" المخصَّص للحجز المفرد، فيتعذّر على المشترك تسجيل الحضور في
-      // أي يوم بعد اليوم الأول وتُقفل جلسته فعلياً لبقية الشهر.
-      if (now > booking.endTime) {
-        await logFailedAttempt(tx, booking.id, action, performedById, "انتهت مدة الاشتراك الشهري");
-        return { status: 422, body: { error: "انتهت مدة اشتراكك الشهري — يلزم تجديده" } };
-      }
-      if (!isWithinPackageWindow(booking.bookingType, now.getTime())) {
-        await logFailedAttempt(tx, booking.id, action, performedById, "خارج نافذة الباقة اليومية");
-        return {
-          status: 422,
-          body: {
-            error: `لا يمكن تسجيل الحضور الآن — اشتراكك متاح ضمن فترة ${packageWindowLabel(booking.bookingType)} فقط`,
-          },
-        };
-      }
-    } else {
-      const isFirstEverCheckIn = !booking.checkInLogs.some((l) => l.action === "CHECK_IN" && l.success);
-
-      if (isFirstEverCheckIn) {
-        const { windowStart, windowEnd } = checkInWindow(booking.startTime);
-        if (now < windowStart || now > windowEnd) {
-          await logFailedAttempt(tx, booking.id, action, performedById, "خارج النافذة الزمنية المسموح بها لتسجيل الحضور");
-          return {
-            status: 422,
-            body: { error: "لا يمكن تسجيل الحضور الآن — يُسمح بالوصول قبل موعد الحجز أو بعده بـ 30 دقيقة فقط" },
-          };
-        }
-      } else if (now > booking.endTime) {
-        await logFailedAttempt(tx, booking.id, action, performedById, "انتهت صلاحية الحجز الزمنية");
-        return { status: 422, body: { error: "انتهت صلاحية هذا الحجز — لا يمكن تسجيل الحضور مجدداً" } };
-      }
-    }
-
-    const remainingBudgetMs = computeRemainingBudgetMs(booking);
-    if (remainingBudgetMs <= 0) {
-      await logFailedAttempt(tx, booking.id, action, performedById, "تم استهلاك كامل وقت الحجز");
-      return { status: 422, body: { error: "تم استهلاك كامل الوقت المدفوع لهذا الحجز" } };
-    }
+    // الرصيد المتبقي لم يعد مانعاً أيضاً؛ إن نفد الوقت المدفوع تبدأ الجلسة بمدة
+    // الحجز الكاملة بدل رفض العميل، ويظل التجاوز ظاهراً للاستقبال في العدّاد.
+    const budgetMs = computeRemainingBudgetMs(booking, now.getTime());
+    const remainingBudgetMs =
+      budgetMs > 0
+        ? budgetMs
+        : Math.max(60 * 60 * 1000, booking.endTime.getTime() - booking.startTime.getTime());
 
     const bufferEndsAt = addSeconds(now, ARRIVAL_BUFFER_SECONDS);
     const actualStartTime = bufferEndsAt;

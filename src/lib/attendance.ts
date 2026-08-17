@@ -220,11 +220,12 @@ export function deriveNextCheckAction(booking: {
   status: string;
   bookingType: string;
 }): "CHECK_IN" | "CHECK_OUT" | null {
+  // الملغى والمرفوض فقط لا إجراء لهما (قرار إداري صريح).
+  if (booking.status === "CANCELLED" || booking.status === "REJECTED") return null;
+  // حضور قائم → الإجراء التالي هو الانصراف. أي حالة أخرى → حضور: بانتظار
+  // التأكيد، أو مؤكَّد، أو متأخر (NO_SHOW)، أو عاد بعد انصراف سابق.
   if (booking.status === "CHECKED_IN") return "CHECK_OUT";
-  if (booking.status === "CONFIRMED") return "CHECK_IN";
-  // الباقات الشهرية تُستأنف: الانصراف يوقف العدّاد ولا يُنهي الاشتراك.
-  if (booking.status === "CHECKED_OUT" && isResumableBookingType(booking.bookingType)) return "CHECK_IN";
-  return null;
+  return "CHECK_IN";
 }
 
 /**
