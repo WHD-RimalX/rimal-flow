@@ -136,15 +136,18 @@ export function CheckInPanel() {
    * لأن الرمز يُستهلَك مرة واحدة — والإجراء نفسه يستنتجه الخادم من حالة الحجز
    * (أول مسح دخول، والتالي خروج) فلا يُرسَل من هنا إطلاقاً.
    */
-  async function handleScanToken(scanToken: string) {
+  async function handleScanToken(scannedValue: string) {
     if (scanning) return;
     setScanning(true);
     setLookupError(null);
     setMessage(null);
     try {
+      // يُرسَل كـ qrToken (الرمز الثابت المعروض حالياً للعميل). الخادم يقبل
+      // أيضاً scanToken المؤقت، فلو أُعيد تفعيل الرمز المتجدد لاحقاً يكفي تبديل
+      // اسم الحقل هنا. الإجراء (دخول/خروج) يستنتجه الخادم من حالة الحجز.
       const res = await apiFetch<{ booking: BookingDTO; message: string; action: CheckAction }>("/api/checkin", {
         method: "POST",
-        body: JSON.stringify({ scanToken }),
+        body: JSON.stringify({ qrToken: scannedValue }),
       });
       setBooking(res.booking);
       setMessage({ type: "success", text: res.message });

@@ -25,15 +25,22 @@ export const checkInRequestSchema = z
       .trim()
       .min(1, "تعذّرت قراءة رمز QR — قرّب الكاميرا وأعد المسح، أو أدخل كود الحجز يدوياً")
       .optional(),
+    // رمز الحجز الثابت — أُعيد قبوله بطلب صريح لضمان عمل المسح في العرض
+    // التقديمي (راجع التعليق في src/components/booking/RotatingQr.tsx).
+    qrToken: z
+      .string()
+      .trim()
+      .min(1, "تعذّرت قراءة رمز QR — قرّب الكاميرا وأعد المسح، أو أدخل كود الحجز يدوياً")
+      .optional(),
     bookingCode: z.string().trim().min(1, "كود الحجز مطلوب").optional(),
     // مطلوب فقط مع المسار اليدوي؛ يُتجاهَل تماماً مع scanToken.
     action: checkActionEnum.optional(),
   })
-  .refine((data) => Boolean(data.scanToken || data.bookingCode), {
+  .refine((data) => Boolean(data.scanToken || data.qrToken || data.bookingCode), {
     message: "يجب مسح رمز QR الخاص بالحجز أو إدخال كود الحجز يدوياً",
     path: ["scanToken"],
   })
-  .refine((data) => Boolean(data.scanToken) || Boolean(data.action), {
+  .refine((data) => Boolean(data.scanToken || data.qrToken) || Boolean(data.action), {
     message: "يجب تحديد الإجراء (دخول/خروج) عند الإدخال اليدوي",
     path: ["action"],
   });

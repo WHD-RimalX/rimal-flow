@@ -165,7 +165,7 @@ export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO
         <div className="mt-4">
           {showQr ? (
             <div className="flex flex-col items-center gap-3">
-              <RotatingQr bookingId={booking.id} />
+              <RotatingQr token={booking.qrToken} />
               <p className="text-center text-xs text-gray-500">
                 {nextAction === "CHECK_OUT"
                   ? "أظهر هذا الرمز للاستقبال لتسجيل المغادرة"

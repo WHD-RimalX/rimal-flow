@@ -32,16 +32,31 @@ export async function POST(req: NextRequest) {
     let bookingId: string;
     let action: "CHECK_IN" | "CHECK_OUT";
 
-    if (data.scanToken) {
-      // نستهلك الرمز أولاً (ذرياً) — أي إعادة إرسال لنفس الرمز بعد هذه اللحظة
-      // تُرفض، حتى لو فشل الإجراء نفسه لاحقاً لسبب عملي (خارج النافذة الزمنية...).
-      bookingId = await consumeScanToken(data.scanToken);
+    if (data.scanToken || data.qrToken) {
+      if (data.scanToken) {
+        // رمز مؤقت: يُستهلَك ذرياً — أي إعادة إرسال بعد هذه اللحظة تُرفض.
+        bookingId = await consumeScanToken(data.scanToken);
+      } else {
+        // رمز الحجز الثابت — أُعيد قبوله بطلب صريح لضمان عمل العرض التقديمي.
+        // لا يُستهلَك، فيبقى صالحاً لكل مسح لاحق (دخول ثم خروج) وأيضاً لأي
+        // لقطة شاشة منه — وهو الأثر الأمني المعروف والمقبول مؤقتاً هنا.
+        const found = await prisma.booking.findUnique({
+          where: { qrToken: data.qrToken! },
+          select: { id: true },
+        });
+        if (!found) {
+          return NextResponse.json({ error: "لم يتم العثور على حجز بهذا الرمز" }, { status: 404 });
+        }
+        bookingId = found.id;
+      }
 
       const current = await prisma.booking.findUniqueOrThrow({
         where: { id: bookingId },
         select: { status: true, bookingType: true },
       });
 
+      // الإجراء يبقى مستنتَجاً من حالة الحجز على الخادم في الحالتين: أول مسح
+      // دخول، والتالي خروج — فلا يمكن لأي طرف فرض ترتيب مخالف.
       const nextAction = deriveNextCheckAction(current);
       if (!nextAction) {
         return NextResponse.json(
