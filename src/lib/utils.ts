@@ -15,13 +15,45 @@ export function formatSAR(amount: number): string {
   return arabicNumberFormatter.format(amount);
 }
 
-const arabicDateTimeFormatter = new Intl.DateTimeFormat("ar-SA", {
-  dateStyle: "medium",
-  timeStyle: "short",
+/**
+ * صيغة التاريخ الموحَّدة في كل التطبيق: dd/mm/yyyy ميلادي بأرقام لاتينية.
+ *
+ * سابقاً كان يُستخدَم `ar-SA` مع dateStyle، وهو يُخرِج التاريخ بالتقويم *الهجري*
+ * وبترتيب مختلف عن المتوقَّع — فيظهر نفس الحجز بصيغ متباينة بين الشاشات. تثبيت
+ * `en-GB` + `gregory` يضمن dd/mm/yyyy ميلادي واحد في كل مكان، والوقت يبقى عربياً
+ * (ص/م). المنطقة الزمنية مثبَّتة على الرياض حتى لا يختلف العرض باختلاف جهاز العميل.
+ */
+const dateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  calendar: "gregory",
+  timeZone: "Asia/Riyadh",
 });
 
-export function formatArabicDateTime(date: Date | string): string {
-  return arabicDateTimeFormatter.format(new Date(date));
+// `-u-nu-latn` يفرض الأرقام اللاتينية مع إبقاء "ص/م" بالعربية — بدونه يخرج
+// الوقت بأرقام هندية (٠٩:٠٠) بجانب تاريخ بأرقام لاتينية (09/09) في نفس السطر.
+const timeFormatter = new Intl.DateTimeFormat("ar-SA-u-nu-latn", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: true,
+  timeZone: "Asia/Riyadh",
+});
+
+/** تاريخ فقط: 12/08/2026 */
+export function formatDate(date: Date | string): string {
+  return dateFormatter.format(new Date(date));
+}
+
+/** وقت فقط: 9:30 ص */
+export function formatTime(date: Date | string): string {
+  return timeFormatter.format(new Date(date));
+}
+
+/** تاريخ ووقت: 12/08/2026 — 9:30 ص */
+export function formatDateTime(date: Date | string): string {
+  const d = new Date(date);
+  return `${dateFormatter.format(d)} — ${timeFormatter.format(d)}`;
 }
 
 export const BOOKING_TYPE_LABELS: Record<string, string> = {

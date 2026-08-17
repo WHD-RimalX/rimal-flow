@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
-import { formatArabicDateTime } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import type { CustomerDTO } from "@/types";
 
 /** قائمة العملاء المسجَّلين بحساب حقيقي على الموقع (اسم/جوال/بريد) — بحث فوري بأي منها. */
@@ -64,7 +64,7 @@ export function CustomersPanel() {
                   </td>
                   <td className="py-2.5 text-gray-600">{c.phone ?? "—"}</td>
                   <td className="py-2.5 text-gray-600">{c.email ?? "—"}</td>
-                  <td className="py-2.5 text-xs text-gray-400">{formatArabicDateTime(c.createdAt)}</td>
+                  <td className="py-2.5 text-xs text-gray-400">{formatDateTime(c.createdAt)}</td>
                 </tr>
               ))}
             </tbody>

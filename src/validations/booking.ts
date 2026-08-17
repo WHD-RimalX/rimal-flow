@@ -75,6 +75,10 @@ export const createBookingSchema = z
     // bookingType حصراً حتى لو أرسل العميل نطاقاً زمنياً مختلفاً (دفاع في العمق).
     endDate: z.coerce.date({ errorMap: () => ({ message: "وقت نهاية الحجز غير صالح" }) }).optional(),
     guests: z.coerce.number().int().min(1).max(MAX_GUESTS_PER_BOOKING, "عدد الضيوف أكبر من الحد المسموح").optional(),
+    // موافقة العميل على الشروط والأحكام. اختياري في المخطط عمداً حتى لا تنكسر
+    // مجموعة Postman الرسمية ولا أي مستهلك API قائم لا يرسله؛ واجهة الحجز تفرضه
+    // فعلياً (زر التأكيد معطَّل بدونه) وتسجّل لحظة الموافقة في termsAcceptedAt.
+    acceptedTerms: z.boolean().optional(),
     isStudent: z.boolean().default(false),
     studentIdNumber: z.string().trim().max(50).optional(),
     notes: z.string().trim().max(500).optional(),
@@ -99,6 +103,13 @@ export const createBookingSchema = z
   .refine((data) => data.startDate.getTime() > Date.now() - 5 * 60 * 1000, {
     message: "لا يمكن إنشاء حجز في وقت ماضٍ",
     path: ["startDate"],
+  })
+  .refine((data) => data.bookingType !== "DAILY" && data.bookingType !== "FOUR_HOUR", {
+    // النوعان باقيان في enum قاعدة البيانات فقط لعرض الحجوزات التاريخية المسجَّلة
+    // بهما سابقاً — لم يعد يُقبل إنشاء حجز جديد بأيٍّ منهما. الحجز بالساعة (حتى
+    // 14 ساعة = يوم دوام كامل) يغطي الحالتين معاً.
+    message: "هذه الباقة لم تعد متاحة — استخدم الحجز بالساعة (حتى يوم دوام كامل)",
+    path: ["bookingType"],
   })
   .refine((data) => businessWindowFor(data.startDate) !== null, {
     // الجمعة إجازة أسبوعية كاملة — لا يُقبل أي حجز يبدأ فيها مهما كان نوعه.

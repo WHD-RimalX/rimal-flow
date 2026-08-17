@@ -14,7 +14,7 @@ import {
   isResumableBookingType,
 } from "@/lib/attendance";
 import { apiFetch, ApiError } from "@/lib/api-client";
-import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
+import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_TYPE_LABELS, formatDateTime, formatSAR } from "@/lib/utils";
 import { MonthlyArrivalPreview } from "@/components/booking/MonthlyArrivalPreview";
 import type { BookingDTO } from "@/types";
 
@@ -131,7 +131,7 @@ export function BookingQrCard({ booking: initialBooking }: { booking: BookingDTO
         <div>
           <p className="font-bold text-gray-900">{booking.space.name}</p>
           <p className="text-xs text-gray-500">
-            {BOOKING_TYPE_LABELS[booking.bookingType]} — {formatArabicDateTime(booking.startTime)}
+            {BOOKING_TYPE_LABELS[booking.bookingType]} — {formatDateTime(booking.startTime)}
           </p>
           <p className="mt-1 font-mono text-xs text-gray-400">{booking.bookingCode}</p>
         </div>

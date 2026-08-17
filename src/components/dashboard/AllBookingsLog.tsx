@@ -12,7 +12,8 @@ import {
   type DisplayStatus,
 } from "@/lib/attendance";
 import { ALLOWED_ADMIN_TRANSITIONS } from "@/lib/booking-transitions";
-import { BOOKING_TYPE_LABELS, BOOKING_STATUS_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
+import { BOOKING_TYPE_LABELS, BOOKING_STATUS_LABELS, formatDateTime, formatSAR } from "@/lib/utils";
+import { DateField } from "@/components/ui/DateField";
 import type { BookingDTO, BookingStatus, SpaceDTO } from "@/types";
 
 const PAGE_SIZE = 10;
@@ -28,18 +29,38 @@ const DISPLAY_FILTERS: { id: "ALL" | DisplayStatus; label: string }[] = [
   { id: "REJECTED", label: DISPLAY_STATUS_LABELS.REJECTED },
 ];
 
+/** كل حالات الحجز الخام — تُعرض كلها للإداري بلا استثناء. */
+const ALL_STATUSES: BookingStatus[] = [
+  "PENDING",
+  "CONFIRMED",
+  "CHECKED_IN",
+  "CHECKED_OUT",
+  "CANCELLED",
+  "NO_SHOW",
+  "REJECTED",
+];
+
 /**
- * الحالات الخام التي يمكن للإداري تحويل الحجز إليها يدوياً، حسب حالته الحالية —
- * مُشتقَّة من آلة الحالة المركزية (src/lib/booking-transitions.ts)، نفس المصدر
- * الذي يفرضه السيرفر فعلياً في PATCH /api/admin/bookings/:id (يرفض أي انتقال
- * خارجها بـ409). لم تعد القائمة "تنقّلاً حراً" بين كل الحالات — كانت هذه ثغرة
- * (SECURITY-AUDIT.md §3، FLOW-C03): مثلاً CONFIRMED → PENDING كانت تتيح "التراجع"
- * عن حجز مؤكَّد، وإحياء حجز ملغى/مرفوض/فائت لم يعد ممكناً إطلاقاً (حالات نهائية).
+ * قائمة الإجراءات الإدارية: تُعرض **كل** الحالات دائماً (بطلب صريح — الإداري
+ * يريد أن يرى الصورة كاملة لا قائمة مبتورة)، مع تمييز المسموح من غير المسموح.
+ *
+ * الأمان غير متأثر: آلة الحالة المركزية على الخادم
+ * (PATCH /api/admin/bookings/:id → applyAdminTransition) هي الحَكَم الفعلي، وترفض
+ * أي انتقال خارج ALLOWED_ADMIN_TRANSITIONS بـ409 مع رسالة تشرح السبب. الواجهة هنا
+ * تعرض وتقترح فقط — لا تقرر. لذلك عرض خيار غير مسموح لا يفتح أي ثغرة، وأقصى ما
+ * يحدث أن الخادم يرفضه ويظهر سبب الرفض للإداري.
  */
-function nextStatusOptions(rawStatus: BookingStatus): { value: BookingStatus; label: string }[] {
-  const allowed = ALLOWED_ADMIN_TRANSITIONS[rawStatus];
-  if (!allowed) return [];
-  return Array.from(allowed).map((status) => ({ value: status, label: BOOKING_STATUS_LABELS[status] }));
+function statusOptions(rawStatus: BookingStatus): {
+  value: BookingStatus;
+  label: string;
+  allowed: boolean;
+}[] {
+  const allowed = ALLOWED_ADMIN_TRANSITIONS[rawStatus] ?? new Set<BookingStatus>();
+  return ALL_STATUSES.filter((s) => s !== rawStatus).map((status) => ({
+    value: status,
+    label: BOOKING_STATUS_LABELS[status],
+    allowed: allowed.has(status),
+  }));
 }
 
 /**
@@ -140,11 +161,12 @@ export function AllBookingsLog() {
               </option>
             ))}
           </select>
-          <input
-            type="date"
+          <DateField
             value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
-            className="rounded-lg border-0 bg-gray-50 px-3 py-1.5 text-xs text-gray-600 shadow-sm"
+            onChange={setDateFilter}
+            placeholder="كل التواريخ"
+            aria-label="تصفية حسب التاريخ"
+            className="min-w-[9.5rem] rounded-lg bg-gray-50 px-3 py-1.5 text-xs shadow-sm"
           />
           {dateFilter && (
             <button onClick={() => setDateFilter("")} className="text-xs font-semibold text-gray-400 hover:text-rimal-purple">
@@ -200,10 +222,10 @@ export function AllBookingsLog() {
             </thead>
             <tbody>
               {pageRows.map(({ booking, displayStatus }) => {
-                const options = nextStatusOptions(booking.status);
+                const options = statusOptions(booking.status);
                 return (
                   <tr key={booking.id} className="border-b border-gray-50 last:border-0">
-                    <td className="py-2.5 text-xs text-gray-600">{formatArabicDateTime(booking.startTime)}</td>
+                    <td className="py-2.5 text-xs text-gray-600">{formatDateTime(booking.startTime)}</td>
                     <td className="py-2.5">
                       {booking.user?.name ?? booking.guestName}
                       <p className="text-xs text-gray-400">{booking.user?.phone ?? booking.guestPhone}</p>
@@ -230,11 +252,25 @@ export function AllBookingsLog() {
                           className="rounded-lg border border-gray-200 px-2 py-1 text-[11px] font-semibold text-gray-600 disabled:opacity-40"
                         >
                           <option value="">إجراء...</option>
-                          {options.map((o) => (
-                            <option key={o.value} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
+                          <optgroup label="متاح من الحالة الحالية">
+                            {options
+                              .filter((o) => o.allowed)
+                              .map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
+                                </option>
+                              ))}
+                          </optgroup>
+                          {/* تُعرض كاملة بطلب صريح — الخادم يرفضها ويشرح السبب إن لم تكن منطقية */}
+                          <optgroup label="غير منطقي من الحالة الحالية">
+                            {options
+                              .filter((o) => !o.allowed)
+                              .map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  ⚠ {o.label}
+                                </option>
+                              ))}
+                          </optgroup>
                         </select>
                       ) : (
                         <span className="text-xs text-gray-300">—</span>

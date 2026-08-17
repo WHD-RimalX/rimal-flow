@@ -60,15 +60,24 @@ function personCountLabel(n: number): string {
   return `${n} أشخاص`;
 }
 
-// نفس منطق تمييز الألوان حسب الباقة في تسعير rimalx.co: بالساعة برتقالي،
-// اليومي أسود محايد، والاشتراك الشهري بنفسجي (يمثّل امتداداً زمنياً أطول).
-function priceRows(space: SpaceDTO) {
+type PriceRow = { label: string; value: string; colorClass: string };
+
+/**
+ * السعر بالساعة فقط للحجز المباشر — الباقة اليومية أُزيلت لأن الحجز بالساعة
+ * (حتى 14 ساعة، أي يوم الدوام كاملاً) يغطيها بالكامل.
+ */
+function hourlyRow(space: SpaceDTO): PriceRow | null {
+  return space.hourlyPrice
+    ? { label: "ساعة", value: space.hourlyPrice, colorClass: "text-rimal-orange" }
+    : null;
+}
+
+/** الاشتراكات الشهرية تُعرض تحت عنوان "باقات" منفصل لتمييزها عن السعر بالساعة. */
+function packageRows(space: SpaceDTO): PriceRow[] {
   return [
-    { label: "ساعة", value: space.hourlyPrice, colorClass: "text-rimal-orange" },
-    { label: "يومي", value: space.dailyPrice, colorClass: "text-gray-900" },
     { label: "☀️ شهري صباحي", value: space.monthlyMorningPrice, colorClass: "text-rimal-purple" },
     { label: "🌙 شهري مسائي", value: space.monthlyEveningPrice, colorClass: "text-rimal-purple" },
-  ].filter((r): r is { label: string; value: string; colorClass: string } => r.value !== null);
+  ].filter((r): r is PriceRow => r.value !== null);
 }
 
 function SpaceCard({ space, onPick }: { space: SpaceDTO; onPick: (spaceId: string) => void }) {
@@ -96,12 +105,27 @@ function SpaceCard({ space, onPick }: { space: SpaceDTO; onPick: (spaceId: strin
         {space.description && <p className="mt-1 line-clamp-2 text-xs text-gray-500">{space.description}</p>}
 
         <div className="mt-4 space-y-1.5 border-t border-dashed border-gray-200 pt-3 text-sm">
-          {priceRows(space).map((row) => (
-            <div key={row.label} className="flex items-center justify-between">
-              <span className="text-gray-500">{row.label}</span>
-              <span className={`font-bold ${row.colorClass}`}>{formatSAR(Number(row.value))}</span>
-            </div>
-          ))}
+          {(() => {
+            const hourly = hourlyRow(space);
+            return hourly ? (
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">{hourly.label}</span>
+                <span className={`font-bold ${hourly.colorClass}`}>{formatSAR(Number(hourly.value))}</span>
+              </div>
+            ) : null;
+          })()}
+
+          {packageRows(space).length > 0 && (
+            <>
+              <p className="pt-2 text-[11px] font-extrabold uppercase tracking-wide text-gray-400">باقات</p>
+              {packageRows(space).map((row) => (
+                <div key={row.label} className="flex items-center justify-between">
+                  <span className="text-gray-500">{row.label}</span>
+                  <span className={`font-bold ${row.colorClass}`}>{formatSAR(Number(row.value))}</span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
 
         <button

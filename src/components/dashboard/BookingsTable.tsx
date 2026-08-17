@@ -10,9 +10,10 @@ import {
   BOOKING_STATUS_COLORS,
   BOOKING_STATUS_LABELS,
   BOOKING_TYPE_LABELS,
-  formatArabicDateTime,
+  formatDateTime,
   formatSAR,
 } from "@/lib/utils";
+import { DateField } from "@/components/ui/DateField";
 import type { BookingDTO, BookingStatus } from "@/types";
 
 const PAGE_SIZE = 10;
@@ -191,11 +192,11 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-bold text-gray-700">الحجوزات — لوحة التحكم الزمنية</h2>
         <div className="flex items-center gap-2">
-          <input
-            type="date"
+          <DateField
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="rounded-lg border-0 bg-gray-50 px-2 py-1.5 text-xs text-gray-600 shadow-sm"
+            onChange={setSelectedDate}
+            aria-label="اختر التاريخ"
+            className="min-w-[9.5rem] rounded-lg bg-gray-50 px-3 py-1.5 text-xs shadow-sm"
           />
           {selectedDate !== todayIso() && (
             <button
@@ -251,7 +252,7 @@ export function BookingsTable({ refreshSignal }: BookingsTableProps = {}) {
                 {bookings.map((booking) => (
                   <tr key={booking.id} className="border-b border-gray-50 last:border-0">
                     <td className="py-2.5 text-xs text-gray-600">
-                      {formatArabicDateTime(booking.startTime)}
+                      {formatDateTime(booking.startTime)}
                       {isToday(booking.startTime) && (
                         <span className="mr-1 text-[10px] text-rimal-orange">● اليوم</span>
                       )}

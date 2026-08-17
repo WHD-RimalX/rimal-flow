@@ -6,7 +6,7 @@ import {
   BOOKING_STATUS_COLORS,
   BOOKING_STATUS_LABELS,
   BOOKING_TYPE_LABELS,
-  formatArabicDateTime,
+  formatDateTime,
 } from "@/lib/utils";
 import { QrScanner } from "@/components/checkin/QrScanner";
 import type { BookingDTO } from "@/types";
@@ -228,7 +228,7 @@ export function CheckInPanel() {
         </div>
         <p className="text-gray-500">{booking.space.name}</p>
         <p className="text-xs text-gray-400">
-          {BOOKING_TYPE_LABELS[booking.bookingType]} — {formatArabicDateTime(booking.startTime)}
+          {BOOKING_TYPE_LABELS[booking.bookingType]} — {formatDateTime(booking.startTime)}
         </p>
         <p className="mt-1 font-mono text-xs text-gray-400">{booking.bookingCode}</p>
       </div>

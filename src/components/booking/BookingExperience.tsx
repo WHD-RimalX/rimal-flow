@@ -14,6 +14,8 @@ import {
   toDateInputValue,
 } from "@/lib/booking-wizard-helpers";
 import { BUSINESS_HOURS_SUMMARY, businessWindowForDateKey } from "@/lib/business-hours";
+import { TermsAgreement } from "@/components/booking/TermsAgreement";
+import { DateField } from "@/components/ui/DateField";
 import { TimeSlotPicker } from "@/components/booking/TimeSlotPicker";
 import { HourStepper } from "@/components/booking/HourStepper";
 import { CustomerPicker, type CustomerSelection } from "@/components/booking/CustomerPicker";
@@ -28,16 +30,54 @@ type MainTab = "spaces" | "memberships";
 // HourStepper) بدلاً منها. الاشتراك الشهري (صباحي/مسائي) عاد متاحاً من هنا
 // أيضاً وليس فقط كبطاقات عرض عامة (MembershipPlans) — لأنه فعلياً باقة حقيقية
 // لمساحات معينة (كالمساحة المشتركة) ولها سعر وتوقيت محدَّدان في بيانات المساحة.
-const SPACE_TYPES: BookingType[] = ["HOURLY", "DAILY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
+// الباقة اليومية أُزيلت: الحجز بالساعة يغطيها بالكامل (حتى 14 ساعة = يوم دوام
+// كامل)، فوجود باقتين لنفس الشيء كان يربك العميل بلا فائدة.
+const SPACE_TYPES: BookingType[] = ["HOURLY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
+
+/** الاشتراكات الشهرية — تُعرض مجمَّعة تحت عنوان "باقات" منفصل عن الحجز المباشر. */
+const PACKAGE_TYPES: BookingType[] = ["MONTHLY_MORNING", "MONTHLY_EVENING"];
+
+/** بطاقة اختيار نوع حجز واحد — مشتركة بين مجموعة الحجز المباشر ومجموعة الباقات. */
+function TypeCard({
+  type,
+  space,
+  onPick,
+}: {
+  type: BookingType;
+  space: SpaceDTO;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      className="rounded-2xl border border-gray-200 p-4 text-right transition hover:border-rimal-purple/40 hover:bg-rimal-purple-50"
+    >
+      <div className="flex items-center justify-between">
+        <span className="font-bold text-gray-900">{BOOKING_TYPE_LABELS[type]}</span>
+        <span className="font-extrabold text-rimal-orange">
+          {formatSAR(priceForType(space, type)!)}
+          {type === "HOURLY" && <span className="text-[10px] font-normal text-gray-400"> /ساعة</span>}
+        </span>
+      </div>
+      {BOOKING_TYPE_HINTS[type] && <p className="mt-1 text-xs text-gray-500">{BOOKING_TYPE_HINTS[type]}</p>}
+    </button>
+  );
+}
 
 /** أوصاف إضافية لكل نوع حجز — تُعرض تحت السعر عند اختيار النوع. */
 const BOOKING_TYPE_HINTS: Partial<Record<BookingType, string>> = {
-  DAILY: "10 ساعات — من بداية الدوام حتى نهايته، لنفس اليوم",
-  MONTHLY_MORNING: "الفترة الصباحية: 8:00 صباحاً – 4:00 عصراً، يومياً لمدة 30 يوماً",
-  MONTHLY_EVENING: "الفترة المسائية: 4:00 عصراً – 11:00 مساءً، يومياً لمدة 30 يوماً",
+  HOURLY: "احجز من ساعة واحدة حتى يوم الدوام كامل — تدفع مقابل ما تحجزه فقط",
+  MONTHLY_MORNING: "الفترة الصباحية: 8:00 صباحاً – 3:00 عصراً، يومياً لمدة 30 يوماً",
+  MONTHLY_EVENING: "الفترة المسائية: 3:00 عصراً – 10:00 مساءً، يومياً لمدة 30 يوماً",
 };
 
-const arabicDateOnlyFormatter = new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium" });
+const arabicDateOnlyFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  calendar: "gregory",
+});
 
 function formatDateOnly(dateStr: string): string {
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -100,6 +140,7 @@ export function BookingExperience() {
   const step: Step = bookingType ? 3 : selectedSpaceId ? 2 : 1;
 
   const [durationHours, setDurationHours] = useState(1);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(new Date()));
   const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
   const [isStudent, setIsStudent] = useState(false);
@@ -128,6 +169,8 @@ export function BookingExperience() {
     () => (selectedSpace ? SPACE_TYPES.filter((t) => priceForType(selectedSpace, t) !== null) : []),
     [selectedSpace]
   );
+  const directTypes = availableTypes.filter((t) => !PACKAGE_TYPES.includes(t));
+  const packageTypes = availableTypes.filter((t) => PACKAGE_TYPES.includes(t));
 
   const isMonthly = bookingType === "MONTHLY_MORNING" || bookingType === "MONTHLY_EVENING";
   const needsTimeSlot = bookingType === "HOURLY";
@@ -195,7 +238,7 @@ export function BookingExperience() {
   }
 
   async function handleConfirm() {
-    if (!selectedSpace || !bookingType || !session?.user || !effectiveStartIso) return;
+    if (!selectedSpace || !bookingType || !session?.user || !effectiveStartIso || !acceptedTerms) return;
     setSubmitting(true);
     setError(null);
 
@@ -207,6 +250,7 @@ export function BookingExperience() {
           bookingType,
           startDate: effectiveStartIso,
           durationHours: bookingType === "HOURLY" ? durationHours : undefined,
+          acceptedTerms,
           isStudent,
           studentIdNumber: isStudent ? studentIdNumber : undefined,
           ...(isStaff && customerSelection ? customerSelection : {}),
@@ -312,25 +356,39 @@ export function BookingExperience() {
           <h3 className="mb-3 text-sm font-bold text-gray-700">
             نوع الحجز — <span className="text-rimal-purple">{selectedSpace.name}</span>
           </h3>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {availableTypes.map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => pickType(type)}
-                className="rounded-2xl border border-gray-200 p-4 text-right transition hover:border-rimal-purple/40 hover:bg-rimal-purple-50"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-gray-900">{BOOKING_TYPE_LABELS[type]}</span>
-                  <span className="font-extrabold text-rimal-orange">
-                    {formatSAR(priceForType(selectedSpace, type)!)}
-                    {type === "HOURLY" && <span className="text-[10px] font-normal text-gray-400"> /ساعة</span>}
-                  </span>
-                </div>
-                {BOOKING_TYPE_HINTS[type] && <p className="mt-1 text-xs text-gray-500">{BOOKING_TYPE_HINTS[type]}</p>}
-              </button>
-            ))}
-          </div>
+          {/* الحجز المباشر بالساعة أولاً، ثم الاشتراكات الشهرية تحت عنوان "باقات" */}
+          {directTypes.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {directTypes.map((type) => (
+                <TypeCard
+                  key={type}
+                  type={type}
+                  space={selectedSpace}
+                  onPick={() => pickType(type)}
+                />
+              ))}
+            </div>
+          )}
+
+          {packageTypes.length > 0 && (
+            <div className={directTypes.length > 0 ? "mt-6" : ""}>
+              <div className="mb-3 flex items-center gap-3">
+                <h4 className="text-sm font-extrabold text-gray-800">باقات</h4>
+                <span className="h-px flex-1 bg-gray-200" />
+                <span className="text-[11px] text-gray-400">اشتراك شهري متجدد يومياً</span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {packageTypes.map((type) => (
+                  <TypeCard
+                    key={type}
+                    type={type}
+                    space={selectedSpace}
+                    onPick={() => pickType(type)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -372,13 +430,12 @@ export function BookingExperience() {
             )}
 
             <label className="label-field">{isMonthly ? "تاريخ بداية الاشتراك" : "التاريخ"}</label>
-            <input
-              type="date"
+            <DateField
               className="input-field max-w-xs"
               value={selectedDate}
               min={toDateInputValue(new Date())}
-              onChange={(e) => {
-                setSelectedDate(e.target.value);
+              onChange={(v) => {
+                setSelectedDate(v);
                 setSelectedSlotIso(null);
               }}
               required
@@ -437,6 +494,8 @@ export function BookingExperience() {
                 required
               />
             )}
+
+            <TermsAgreement accepted={acceptedTerms} onChange={setAcceptedTerms} />
           </div>
 
           <div className="lg:col-span-2">
@@ -474,7 +533,7 @@ export function BookingExperience() {
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={submitting || !session?.user || !effectiveStartIso || isClosedDay}
+                disabled={submitting || !session?.user || !effectiveStartIso || isClosedDay || !acceptedTerms}
                 className="btn-accent mt-5 w-full"
               >
                 {!session?.user
@@ -483,6 +542,8 @@ export function BookingExperience() {
                   ? "المقر مغلق في هذا اليوم"
                   : !effectiveStartIso
                   ? "أكمل اختيار الوقت أولاً"
+                  : !acceptedTerms
+                  ? "وافق على الشروط والأحكام أولاً"
                   : submitting
                   ? "جارِ تأكيد الحجز..."
                   : "تأكيد الحجز"}

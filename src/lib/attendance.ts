@@ -1,4 +1,11 @@
 import type { BookingDTO, CheckInLogDTO } from "@/types";
+import {
+  isWithinBusinessHours,
+  packageDailyBudgetMs,
+  packageDayWindow,
+  riyadhHourOfDay,
+  riyadhHourOnSameDay,
+} from "@/lib/business-hours";
 
 /** مهلة الوصول للمقعد بعد مسح الباركود قبل بدء احتساب وقت الحجز المدفوع. */
 export const ARRIVAL_BUFFER_SECONDS = 30;
@@ -119,21 +126,56 @@ export function computeElapsedActiveMs(
  * للاستئناف أصلاً — بمجرد تسجيل الانصراف مرة واحدة ينتهي الحجز نهائياً والوقت
  * المتبقي يصبح صفراً فوراً، بصرف النظر عمّا استُهلِك فعلياً من الوقت المدفوع.
  */
-export function computeRemainingBudgetMs(booking: {
-  startTime: string | Date;
-  endTime: string | Date;
-  bookingType?: string;
-  status?: string;
-  checkInLogs?: CheckInLogLike[];
-}): number {
+export function computeRemainingBudgetMs(
+  booking: {
+    startTime: string | Date;
+    endTime: string | Date;
+    bookingType?: string;
+    status?: string;
+    checkInLogs?: CheckInLogLike[];
+  },
+  now: number = Date.now()
+): number {
   const resumable = booking.bookingType ? isResumableBookingType(booking.bookingType) : true;
-  if (!resumable && booking.status === "CHECKED_OUT") {
-    return 0;
+
+  if (!resumable) {
+    if (booking.status === "CHECKED_OUT") return 0;
+    const totalBudgetMs = new Date(booking.endTime).getTime() - new Date(booking.startTime).getTime();
+    const elapsed = computeElapsedActiveMs(booking.checkInLogs, { roundSessionsToQuarterHour: false });
+    return Math.max(0, totalBudgetMs - elapsed);
   }
 
-  const totalBudgetMs = new Date(booking.endTime).getTime() - new Date(booking.startTime).getTime();
-  const elapsed = computeElapsedActiveMs(booking.checkInLogs, { roundSessionsToQuarterHour: resumable });
-  return Math.max(0, totalBudgetMs - elapsed);
+  // الباقة الشهرية: الرصيد ليس (endTime - startTime) — تلك 30 يوماً متصلة (720
+  // ساعة!) وهو رقم بلا معنى للعميل. الرصيد الحقيقي *يومي*: طول نافذة الباقة
+  // (7 ساعات) ناقص ما استُهلك منها اليوم، ومحدوداً أيضاً بما تبقّى فعلياً حتى
+  // إغلاق نافذة اليوم — فلا يُعرض رصيد لا يمكن استخدامه قبل انتهاء الفترة.
+  if (now > new Date(booking.endTime).getTime()) return 0;
+
+  const bookingType = booking.bookingType ?? "";
+  const dailyBudgetMs = packageDailyBudgetMs(bookingType);
+  if (dailyBudgetMs === 0) return 0;
+
+  const usedTodayMs = computeElapsedActiveMs(todaysLogs(booking.checkInLogs, now), {
+    roundSessionsToQuarterHour: true,
+  });
+
+  const window = packageDayWindow(bookingType);
+  const msUntilWindowCloses = window
+    ? riyadhHourOnSameDay(new Date(now), window.closeHour).getTime() - now
+    : dailyBudgetMs;
+
+  return Math.max(0, Math.min(dailyBudgetMs - usedTodayMs, msUntilWindowCloses));
+}
+
+/** يقصر سجلات الحضور على جلسات اليوم الحالي (بتوقيت الرياض) — لحساب الرصيد اليومي للباقات. */
+function todaysLogs(logs: CheckInLogLike[] | undefined, now: number): CheckInLogLike[] | undefined {
+  if (!logs) return logs;
+  const dayStart = riyadhDayStartMs(now);
+  const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+  return logs.filter((l) => {
+    const t = new Date(l.timestamp).getTime();
+    return t >= dayStart && t < dayEnd;
+  });
 }
 
 /**
@@ -155,6 +197,28 @@ export function deriveNextCheckAction(booking: {
   // الباقات الشهرية تُستأنف: الانصراف يوقف العدّاد ولا يُنهي الاشتراك.
   if (booking.status === "CHECKED_OUT" && isResumableBookingType(booking.bookingType)) return "CHECK_IN";
   return null;
+}
+
+/**
+ * هل نحن الآن داخل نافذة الباقة الشهرية اليومية (الصباحية 8ص–3م أو المسائية
+ * 3م–10م)؟ هذا هو القيد الزمني الصحيح لمشترك شهري — وليس نافذة "±30 دقيقة حول
+ * وقت البدء" المخصَّصة لحجز مفرد بموعد محدد. المشترك يحضر أي يوم ضمن اشتراكه
+ * وفي أي وقت ضمن فترته.
+ */
+export function isWithinPackageWindow(bookingType: string, now: number = Date.now()): boolean {
+  const window = packageDayWindow(bookingType);
+  if (!window) return false;
+  if (!isWithinBusinessHours(new Date(now))) return false;
+  const hour = riyadhHourOfDay(new Date(now));
+  return hour >= window.openHour && hour < window.closeHour;
+}
+
+/** نص وصفي لنافذة الباقة يُعرض في رسائل الرفض. */
+export function packageWindowLabel(bookingType: string): string {
+  const w = packageDayWindow(bookingType);
+  if (!w) return "";
+  const fmt = (h: number) => (h < 12 ? `${h} صباحاً` : h === 12 ? "12 ظهراً" : `${h - 12} مساءً`);
+  return `${fmt(w.openHour)} – ${fmt(w.closeHour)}`;
 }
 
 /** بداية اليوم بتوقيت الرياض (UTC+3 ثابت) للحظة معطاة، كطابع زمني UTC. */

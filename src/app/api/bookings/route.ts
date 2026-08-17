@@ -136,6 +136,7 @@ export async function POST(req: NextRequest) {
             discountAmount,
             finalPrice,
             notes: data.notes,
+            termsAcceptedAt: data.acceptedTerms ? new Date() : null,
             // يبدأ كل حجز جديد بحالة PENDING (توافقاً مع عقد التكامل §10) ويحتاج
             // تأكيداً يدوياً صريحاً من موظف عبر PATCH /api/admin/bookings/:id —
             // لم يعد يُنشأ مؤكَّداً تلقائياً كما كان سابقاً.

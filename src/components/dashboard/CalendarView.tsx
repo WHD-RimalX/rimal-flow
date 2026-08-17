@@ -19,7 +19,7 @@ import {
   DISPLAY_STATUS_LABELS,
   deriveDisplayStatus,
 } from "@/lib/attendance";
-import { BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
+import { BOOKING_TYPE_LABELS, formatDateTime, formatSAR } from "@/lib/utils";
 import type { BookingDTO } from "@/types";
 
 export function CalendarView() {
@@ -147,7 +147,7 @@ export function CalendarView() {
                     const displayStatus = deriveDisplayStatus(b, Date.now());
                     return (
                       <tr key={b.id} className="border-b border-gray-50 last:border-0">
-                        <td className="py-2.5 text-xs text-gray-600">{formatArabicDateTime(b.startTime)}</td>
+                        <td className="py-2.5 text-xs text-gray-600">{formatDateTime(b.startTime)}</td>
                         <td className="py-2.5">
                           {b.user?.name ?? b.guestName}
                           <p className="text-xs text-gray-400">{b.user?.phone ?? b.guestPhone}</p>

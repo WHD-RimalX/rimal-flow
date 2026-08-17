@@ -161,6 +161,10 @@ model Booking {
   status BookingStatus @default(PENDING)
   notes  String?
 
+  // لحظة موافقة العميل على الشروط والأحكام عند إنشاء الحجز — تُسجَّل للإثبات
+  // (خصوصاً بند احتساب الوقت بتقريب ربع الساعة لأعلى، وهو أكثر ما قد يُعترَض عليه).
+  termsAcceptedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -1,9 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import { checkInWindow } from "@/lib/pricing";
-import { ARRIVAL_BUFFER_SECONDS, computeRemainingBudgetMs, isResumableBookingType } from "@/lib/attendance";
+import {
+  ARRIVAL_BUFFER_SECONDS,
+  computeRemainingBudgetMs,
+  isResumableBookingType,
+  isWithinPackageWindow,
+  packageWindowLabel,
+} from "@/lib/attendance";
 import { serializeBooking } from "@/lib/serialize-booking";
 import { getSeatCountForSpace } from "@/lib/floor-map-config";
 import { recordStatusTransition } from "@/lib/booking-state-machine";
+import { isAttendanceWindowRelaxed } from "@/lib/test-mode";
 import { addSeconds } from "date-fns";
 import type { Booking, CheckInLog, Prisma, Space } from "@prisma/client";
 
@@ -118,20 +125,47 @@ async function performCheckInAction(tx: Tx, params: RunParams): Promise<CheckInR
       };
     }
 
-    const isFirstEverCheckIn = !booking.checkInLogs.some((l) => l.action === "CHECK_IN" && l.success);
+    // وضع التجربة (محلي/Preview فقط، مستحيل تفعيله في الإنتاج) يتخطى القيود
+    // الزمنية وحدها — راجع src/lib/test-mode.ts.
+    const relaxWindows = isAttendanceWindowRelaxed();
 
-    if (isFirstEverCheckIn) {
-      const { windowStart, windowEnd } = checkInWindow(booking.startTime);
-      if (now < windowStart || now > windowEnd) {
-        await logFailedAttempt(tx, booking.id, action, performedById, "خارج النافذة الزمنية المسموح بها لتسجيل الحضور");
+    if (relaxWindows) {
+      // لا فحص نوافذ زمنية — بقية القيود (الحالة، الرصيد، الذرية) تُطبَّق كالمعتاد.
+    } else if (resumable) {
+      // الاشتراك الشهري: حقّ حضور يومي متجدد طوال مدة الاشتراك — لا "موعد" واحد.
+      // القيدان الوحيدان: ألا يكون الاشتراك قد انتهى، وأن يكون الوقت الحالي ضمن
+      // فترة الباقة اليومية (صباحية/مسائية). سابقاً كان يُطبَّق عليه قيد "±30 دقيقة
+      // حول وقت البدء" المخصَّص للحجز المفرد، فيتعذّر على المشترك تسجيل الحضور في
+      // أي يوم بعد اليوم الأول وتُقفل جلسته فعلياً لبقية الشهر.
+      if (now > booking.endTime) {
+        await logFailedAttempt(tx, booking.id, action, performedById, "انتهت مدة الاشتراك الشهري");
+        return { status: 422, body: { error: "انتهت مدة اشتراكك الشهري — يلزم تجديده" } };
+      }
+      if (!isWithinPackageWindow(booking.bookingType, now.getTime())) {
+        await logFailedAttempt(tx, booking.id, action, performedById, "خارج نافذة الباقة اليومية");
         return {
           status: 422,
-          body: { error: "لا يمكن تسجيل الحضور الآن — يُسمح بالوصول قبل موعد الحجز أو بعده بـ 30 دقيقة فقط" },
+          body: {
+            error: `لا يمكن تسجيل الحضور الآن — اشتراكك متاح ضمن فترة ${packageWindowLabel(booking.bookingType)} فقط`,
+          },
         };
       }
-    } else if (now > booking.endTime) {
-      await logFailedAttempt(tx, booking.id, action, performedById, "انتهت صلاحية الحجز الزمنية");
-      return { status: 422, body: { error: "انتهت صلاحية هذا الحجز — لا يمكن تسجيل الحضور مجدداً" } };
+    } else {
+      const isFirstEverCheckIn = !booking.checkInLogs.some((l) => l.action === "CHECK_IN" && l.success);
+
+      if (isFirstEverCheckIn) {
+        const { windowStart, windowEnd } = checkInWindow(booking.startTime);
+        if (now < windowStart || now > windowEnd) {
+          await logFailedAttempt(tx, booking.id, action, performedById, "خارج النافذة الزمنية المسموح بها لتسجيل الحضور");
+          return {
+            status: 422,
+            body: { error: "لا يمكن تسجيل الحضور الآن — يُسمح بالوصول قبل موعد الحجز أو بعده بـ 30 دقيقة فقط" },
+          };
+        }
+      } else if (now > booking.endTime) {
+        await logFailedAttempt(tx, booking.id, action, performedById, "انتهت صلاحية الحجز الزمنية");
+        return { status: 422, body: { error: "انتهت صلاحية هذا الحجز — لا يمكن تسجيل الحضور مجدداً" } };
+      }
     }
 
     const remainingBudgetMs = computeRemainingBudgetMs(booking);

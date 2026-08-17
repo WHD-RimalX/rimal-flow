@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useNow } from "@/lib/hooks/useNow";
 import { computeRemainingBudgetMs, formatDuration } from "@/lib/attendance";
 import { customerNameOf } from "@/lib/attendance";
-import { formatArabicDateTime, formatSAR } from "@/lib/utils";
+import { formatDateTime, formatSAR } from "@/lib/utils";
 import type { BookingDTO, BookingType } from "@/types";
 
 const SUBSCRIPTION_TYPES: { type: BookingType; label: string; accent: string }[] = [
@@ -101,8 +101,8 @@ export function SubscribersPanel() {
                       <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-gray-500">
                         <span>المساحة: {b.space.name}</span>
                         <span className="text-left">{formatSAR(Number(b.finalPrice))}</span>
-                        <span>بدأ: {formatArabicDateTime(b.startTime)}</span>
-                        <span className="text-left">ينتهي: {formatArabicDateTime(b.endTime)}</span>
+                        <span>بدأ: {formatDateTime(b.startTime)}</span>
+                        <span className="text-left">ينتهي: {formatDateTime(b.endTime)}</span>
                       </div>
                       {subStatus !== "EXPIRED" && subStatus !== "CANCELLED" && (
                         <p className="mt-2 text-xs font-semibold text-rimal-purple">

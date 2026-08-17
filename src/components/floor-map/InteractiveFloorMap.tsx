@@ -352,7 +352,15 @@ export function InteractiveFloorMap({ onSelectSpace, onManageSeat, refreshSignal
   // توزيع الـ 25 مقعداً المرسومة حسب المخطط: 5 بعمود رأسي يمين الدور الأرضي،
   // 8 على شكل حرف L أقصى يسار الدور العلوي، و12 (صفّان متقابلان) يمين الدور العلوي.
   const sharedGround = sharedSeats.slice(0, 5);
-  const sharedLShape = sharedSeats.slice(5, 13);
+  // مقاعد "واحة" (الشكل الحرفي L أعلى لاونج كبار الشخصيات): تُعرض باسمها الخاص
+  // وبدون سعر — ليست معروضة للحجز المباشر بسعر مستقل، فإظهار سعر المساحة
+  // المشتركة عليها كان مضلِّلاً. تبقى قابلة للتسكين اليدوي من الاستقبال كما هي.
+  const sharedLShape = sharedSeats.slice(5, 13).map((seat, i) => ({
+    ...seat,
+    spaceName: "واحة",
+    seatLabel: `مقعد واحة رقم ${i + 1}`,
+    price: null,
+  }));
   const sharedFirstRowA = sharedSeats.slice(13, 19);
   const sharedFirstRowB = sharedSeats.slice(19, 25);
 

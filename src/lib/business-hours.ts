@@ -32,6 +32,27 @@ export const BUSINESS_WEEK: readonly (BusinessDayWindow | null)[] = [
 /** فتحات الحجز تعمل بشبكة ربع ساعة. */
 export const SLOT_GRANULARITY_MINUTES = 15;
 
+/**
+ * نوافذ الباقات الشهرية اليومية — الاشتراك الشهري ليس رصيداً متصلاً لـ30 يوماً،
+ * بل حقّ حضور *يومي* ضمن فترة محددة تتجدد كل يوم طوال مدة الاشتراك:
+ * الصباحي 8ص–3م والمسائي 3م–10م (7 ساعات لكل يوم).
+ */
+export const PACKAGE_DAY_WINDOWS: Record<string, BusinessDayWindow> = {
+  MONTHLY_MORNING: { openHour: 8, closeHour: 15 },
+  MONTHLY_EVENING: { openHour: 15, closeHour: 22 },
+};
+
+/** نافذة الباقة اليومية لنوع حجز شهري — null لغير الشهري. */
+export function packageDayWindow(bookingType: string): BusinessDayWindow | null {
+  return PACKAGE_DAY_WINDOWS[bookingType] ?? null;
+}
+
+/** طول نافذة الباقة اليومية بالميلي ثانية (الرصيد اليومي المتاح للمشترك). */
+export function packageDailyBudgetMs(bookingType: string): number {
+  const w = packageDayWindow(bookingType);
+  return w ? (w.closeHour - w.openHour) * 60 * 60 * 1000 : 0;
+}
+
 /** رقم يوم الأسبوع بتوقيت الرياض للحظة معطاة (0 = الأحد). */
 export function riyadhDayOfWeek(at: Date): number {
   return new Date(at.getTime() + RIYADH_OFFSET_MS).getUTCDay();

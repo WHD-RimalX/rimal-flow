@@ -7,14 +7,16 @@ import {
   DISPLAY_STATUS_LABELS,
   deriveDisplayStatus,
 } from "@/lib/attendance";
-import { BOOKING_TYPE_LABELS, formatArabicDateTime, formatSAR } from "@/lib/utils";
+import { BOOKING_TYPE_LABELS, formatDateTime, formatSAR } from "@/lib/utils";
 import { FIXED_START_HOUR, priceForType, riyadhDateToIso, toDateInputValue } from "@/lib/booking-wizard-helpers";
+import { DateField } from "@/components/ui/DateField";
 import { TimeSlotPicker } from "@/components/booking/TimeSlotPicker";
 import { HourStepper } from "@/components/booking/HourStepper";
 import { CustomerPicker, type CustomerSelection } from "@/components/booking/CustomerPicker";
 import type { BookingDTO, BookingType, SpaceDTO } from "@/types";
 
-const CREATABLE_TYPES: BookingType[] = ["HOURLY", "DAILY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
+// الباقة اليومية أُزيلت — الحجز بالساعة (حتى يوم دوام كامل) يغطيها.
+const CREATABLE_TYPES: BookingType[] = ["HOURLY", "MONTHLY_MORNING", "MONTHLY_EVENING"];
 
 /** نموذج تسجيل حجز جديد من لوحة التحكم — إما لعميل مسجَّل مسبقاً (بحث بالاسم/الجوال)
  *  أو لضيف walk-in بلا حساب (اسم + جوال فقط، يظهر لاحقاً في قائمة الزائرين). */
@@ -140,13 +142,12 @@ function CreateBookingForm({ onCreated }: { onCreated: () => void }) {
 
       <div>
         <label className="label-field">التاريخ</label>
-        <input
-          type="date"
+        <DateField
           className="input-field max-w-xs"
           value={selectedDate}
           min={toDateInputValue(new Date())}
-          onChange={(e) => {
-            setSelectedDate(e.target.value);
+          onChange={(v) => {
+            setSelectedDate(v);
             setSelectedSlotIso(null);
           }}
           required
@@ -287,7 +288,7 @@ export function WalkInsPanel() {
                   const displayStatus = deriveDisplayStatus(booking, now);
                   return (
                     <tr key={booking.id} className="border-b border-gray-50 last:border-0">
-                      <td className="py-2.5 text-xs text-gray-600">{formatArabicDateTime(booking.startTime)}</td>
+                      <td className="py-2.5 text-xs text-gray-600">{formatDateTime(booking.startTime)}</td>
                       <td className="py-2.5 font-medium text-gray-800">{booking.guestName}</td>
                       <td className="py-2.5 text-xs text-gray-500">{booking.guestPhone}</td>
                       <td className="py-2.5">{booking.space.name}</td>

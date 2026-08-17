@@ -54,7 +54,12 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ["var(--font-tajawal)", "Tajawal", "Arial", "sans-serif"],
+        // مطابِقة لحزمة rimalx.co حرفياً: "GE SS Two", Tajawal, sans-serif —
+        // GE SS Two يرسم الحروف العربية، وTajawal يرسم الأرقام والحروف اللاتينية
+        // والرموز التي لا يحتويها (فحص cmap: بلا أي حرف لاتيني).
+        sans: ["var(--font-arabic)", "var(--font-tajawal)", "system-ui", "sans-serif"],
+        // الخط الإنجليزي الثانوي المعتمد — يُستدعى صراحةً للنصوص الإنجليزية البحتة.
+        latin: ["var(--font-latin)", "var(--font-tajawal)", "system-ui", "sans-serif"],
       },
       keyframes: {
         "pulse-soft": {
