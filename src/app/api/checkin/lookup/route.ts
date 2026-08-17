@@ -7,20 +7,20 @@ import { reconcileExpiredBookings } from "@/lib/booking-lifecycle";
 import { z } from "zod";
 
 /**
- * بحث قراءة فقط. لا يقبل رموز المسح (scanToken) عمداً: رمز المسح يُستهلَك مرة
- * واحدة وينفّذ الإجراء مباشرة عبر POST /api/checkin، فلا معنى لـ"معاينته" أولاً
- * (المعاينة كانت ستحرق الرمز أو تتركه صالحاً بلا داعٍ). المتبقي هنا هو مسارات
- * الاستعلام اليدوية التي يتحقق فيها الموظف من الهوية شخصياً.
+ * بحث قراءة فقط عن حجز — يقبل رمز QR الخاص بالحجز أو كوده أو رقم جوال العميل.
+ * لا يغيّر أي حالة ولا يستهلك أي رمز، فهو مجرّد معاينة يعرضها الاستقبال قبل
+ * تنفيذ إجراء الحضور/الانصراف الفعلي عبر POST /api/checkin.
  */
 const lookupSchema = z
   .object({
-    bookingCode: z.string().trim().min(1).optional(),
+    qrToken: z.string().trim().min(1, "تعذّرت قراءة رمز QR — قرّب الكاميرا وأعد المسح").optional(),
+    bookingCode: z.string().trim().min(1, "كود الحجز مطلوب").optional(),
     // بحث برقم الجوال — لضيوف walk-in بلا حساب ولا رمز QR (لم يُثبَّت التطبيق لديهم).
     // يُعيد أنسب حجز نشط مطابق لهذا الرقم (حجز العميل المسجَّل أو حجز الضيف).
     phone: z.string().trim().min(1).optional(),
   })
-  .refine((data) => Boolean(data.bookingCode || data.phone), {
-    message: "يجب توفير كود الحجز أو رقم الجوال",
+  .refine((data) => Boolean(data.qrToken || data.bookingCode || data.phone), {
+    message: "يجب مسح رمز QR الخاص بالحجز أو إدخال كود الحجز أو رقم الجوال",
   });
 
 const bookingInclude = {
@@ -62,12 +62,12 @@ export async function POST(req: NextRequest) {
     }
 
     const booking = await prisma.booking.findUnique({
-      where: { bookingCode: data.bookingCode! },
+      where: data.qrToken ? { qrToken: data.qrToken } : { bookingCode: data.bookingCode! },
       include: bookingInclude,
     });
 
     if (!booking) {
-      return NextResponse.json({ error: "لم يتم العثور على حجز بهذا الكود" }, { status: 404 });
+      return NextResponse.json({ error: "لم يتم العثور على حجز بهذا الرمز" }, { status: 404 });
     }
 
     return NextResponse.json({ booking: serializeBooking(booking) });

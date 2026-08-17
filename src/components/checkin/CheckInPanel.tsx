@@ -39,8 +39,8 @@ function ScanStep({
     <div className="card mx-auto max-w-md">
       <h1 className="text-lg font-extrabold text-gray-900">امسح رمز QR الخاص بحجز العميل</h1>
       <p className="mt-1 text-sm text-gray-500">
-        وجّه الكاميرا نحو الرمز الظاهر في شاشة العميل — رمز مؤقت لمرة واحدة. المسح يُنفّذ الإجراء
-        مباشرة: أول مسح للجلسة تسجيل دخول، والمسح التالي تسجيل خروج.
+        وجّه الكاميرا نحو الرمز الظاهر في شاشة العميل — ستظهر بيانات حجزه ثم تختار تسجيل الدخول
+        أو الخروج.
       </p>
 
       {mode === "camera" && (
@@ -132,34 +132,23 @@ export function CheckInPanel() {
   const [scanning, setScanning] = useState(false);
 
   /**
-   * مسح رمز مؤقت: عملية واحدة تُنفّذ الإجراء مباشرة. لا نستعلم أولاً ثم ننفّذ،
-   * لأن الرمز يُستهلَك مرة واحدة — والإجراء نفسه يستنتجه الخادم من حالة الحجز
-   * (أول مسح دخول، والتالي خروج) فلا يُرسَل من هنا إطلاقاً.
+   * مسح رمز QR الخاص بالحجز: استعلام فقط لعرض بيانات الحجز، ثم يختار الموظف
+   * الإجراء (دخول/خروج) صراحةً من الأزرار.
+   *
+   * تُفضَّل الخطوتان على التنفيذ الفوري عند المسح لأن الموظف يرى اسم العميل
+   * وحالة حجزه قبل أي تغيير — فلو مسح رمز الشخص الخطأ يتراجع بلا أثر، ولو كان
+   * الحجز في حالة لا تقبل إجراءً تظهر له البيانات وسبب التعطيل بدل رسالة رفض
+   * مجرّدة. الرمز هنا لا يُستهلَك، فالمعاينة آمنة ويمكن تكرارها.
    */
   async function handleScanToken(scannedValue: string) {
     if (scanning) return;
     setScanning(true);
-    setLookupError(null);
-    setMessage(null);
-    try {
-      // يُرسَل كـ qrToken (الرمز الثابت المعروض حالياً للعميل). الخادم يقبل
-      // أيضاً scanToken المؤقت، فلو أُعيد تفعيل الرمز المتجدد لاحقاً يكفي تبديل
-      // اسم الحقل هنا. الإجراء (دخول/خروج) يستنتجه الخادم من حالة الحجز.
-      const res = await apiFetch<{ booking: BookingDTO; message: string; action: CheckAction }>("/api/checkin", {
-        method: "POST",
-        body: JSON.stringify({ qrToken: scannedValue }),
-      });
-      setBooking(res.booking);
-      setMessage({ type: "success", text: res.message });
-    } catch (err) {
-      setLookupError(err instanceof ApiError ? err.message : "تعذّر تنفيذ المسح");
-    } finally {
-      setScanning(false);
-    }
+    await handleLookup({ qrToken: scannedValue });
+    setScanning(false);
   }
 
-  /** المسار اليدوي (كود حجز أو رقم جوال) — استعلام أولاً ثم اختيار الإجراء صراحةً. */
-  async function handleLookup(params: { bookingCode?: string; phone?: string }) {
+  /** استعلام عن حجز (رمز QR أو كود حجز أو رقم جوال) — قراءة فقط، بلا أي تغيير حالة. */
+  async function handleLookup(params: { qrToken?: string; bookingCode?: string; phone?: string }) {
     setLookupLoading(true);
     setLookupError(null);
     try {
@@ -181,6 +170,8 @@ export function CheckInPanel() {
     setPendingAction(action);
     setMessage(null);
     try {
+      // يُرسَل بكود الحجز مع الإجراء الصريح الذي اختاره الموظف — نفس المسار
+      // للحالتين (بعد المسح أو بعد الإدخال اليدوي)، فلا تتفرّع المعالجة.
       const res = await apiFetch<{ booking: BookingDTO; message: string }>("/api/checkin", {
         method: "POST",
         body: JSON.stringify({ bookingCode: booking.bookingCode, action }),
