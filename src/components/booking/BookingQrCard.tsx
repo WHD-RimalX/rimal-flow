@@ -6,12 +6,13 @@ import { RotatingQr } from "@/components/booking/RotatingQr";
 import {
   cancellationReasonText,
   computeLiveState,
-  computeRemainingBudgetMs,
+  dayCountLabel,
   deriveNextCheckAction,
   findActiveCheckInLog,
   formatDuration,
   isBookingQrUsable,
   isResumableBookingType,
+  remainingSubscriptionDays,
 } from "@/lib/attendance";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_TYPE_LABELS, formatDateTime, formatSAR } from "@/lib/utils";
@@ -26,11 +27,17 @@ function LiveTimerLine({ booking, now }: { booking: BookingDTO; now: number }) {
     if (!resumable) {
       return <p className="text-sm font-bold text-gray-400">انتهت الجلسة — هذا الحجز مغلق</p>;
     }
-    const remainingMs = computeRemainingBudgetMs(booking);
-    if (remainingMs <= 0) {
-      return <p className="text-sm font-bold text-gray-400">تم استهلاك كامل الرصيد</p>;
+    // الاشتراك الشهري: الرصيد بالأيام المتبقية من مدته، لا بالساعات — الساعات
+    // تخص الجلسة الجارية فقط وتظهر في العدّاد أثناء الحضور.
+    const days = remainingSubscriptionDays(booking, now);
+    if (days <= 0) {
+      return <p className="text-sm font-bold text-gray-400">انتهت مدة الاشتراك</p>;
     }
-    return <p className="text-sm font-bold text-rimal-purple">الرصيد المتبقي: {formatDuration(remainingMs)}</p>;
+    return (
+      <p className="text-sm font-bold text-rimal-purple">
+        متبقٍ من اشتراكك: {dayCountLabel(days)}
+      </p>
+    );
   }
 
   if (booking.status === "CHECKED_IN") {
@@ -50,6 +57,14 @@ function LiveTimerLine({ booking, now }: { booking: BookingDTO; now: number }) {
   }
 
   if (booking.status === "PENDING" || booking.status === "CONFIRMED") {
+    if (resumable) {
+      const days = remainingSubscriptionDays(booking, now);
+      return (
+        <p className="text-sm text-gray-500">
+          {days > 0 ? `متبقٍ من اشتراكك: ${dayCountLabel(days)}` : "انتهت مدة الاشتراك"}
+        </p>
+      );
+    }
     return <p className="text-sm text-gray-500">بانتظار تسجيل الحضور عند وصولك</p>;
   }
 

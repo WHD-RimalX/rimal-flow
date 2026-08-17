@@ -167,6 +167,34 @@ export function computeRemainingBudgetMs(
   return Math.max(0, Math.min(dailyBudgetMs - usedTodayMs, msUntilWindowCloses));
 }
 
+/**
+ * الأيام المتبقية في اشتراك شهري — هذا هو "الرصيد" الذي يهم المشترك فعلاً.
+ *
+ * عرض الرصيد بالساعات كان مربكاً: الاشتراك ليس رصيد ساعات يُستهلك، بل حق حضور
+ * يومي متجدد ضمن فترته طوال مدته. الساعات المتبقية *اليوم* تُعرض في العدّاد
+ * أثناء الجلسة فقط (computeRemainingBudgetMs)، أما الرصيد العام فبالأيام.
+ *
+ * يُحتسب باليوم التقويمي بتوقيت الرياض (لا بفارق 24 ساعة) — اشتراك ينتهي غداً
+ * ظهراً يبقى "يوم واحد" وليس نصف يوم. يُعيد 0 عند الانتهاء.
+ */
+export function remainingSubscriptionDays(
+  booking: { endTime: string | Date },
+  now: number = Date.now()
+): number {
+  const endDay = riyadhDayStartMs(new Date(booking.endTime).getTime());
+  const today = riyadhDayStartMs(now);
+  return Math.max(0, Math.round((endDay - today) / (24 * 60 * 60 * 1000)));
+}
+
+/** صياغة عربية سليمة لعدد الأيام (يوم/يومان/أيام). */
+export function dayCountLabel(days: number): string {
+  if (days <= 0) return "انتهى الاشتراك";
+  if (days === 1) return "يوم واحد";
+  if (days === 2) return "يومان";
+  if (days <= 10) return `${days} أيام`;
+  return `${days} يوماً`;
+}
+
 /** يقصر سجلات الحضور على جلسات اليوم الحالي (بتوقيت الرياض) — لحساب الرصيد اليومي للباقات. */
 function todaysLogs(logs: CheckInLogLike[] | undefined, now: number): CheckInLogLike[] | undefined {
   if (!logs) return logs;

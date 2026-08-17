@@ -4,7 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { useNow } from "@/lib/hooks/useNow";
-import { cancellationReasonText, computeLiveState, computeRemainingBudgetMs, findActiveCheckInLog, formatDuration } from "@/lib/attendance";
+import {
+  cancellationReasonText,
+  computeLiveState,
+  computeRemainingBudgetMs,
+  dayCountLabel,
+  findActiveCheckInLog,
+  formatDuration,
+  isResumableBookingType,
+  remainingSubscriptionDays,
+} from "@/lib/attendance";
 import { ALLOWED_ADMIN_TRANSITIONS } from "@/lib/booking-transitions";
 import {
   BOOKING_STATUS_COLORS,
@@ -60,7 +69,16 @@ function isToday(dateStr: string) {
  */
 function RemainingTimeCell({ booking, now }: { booking: BookingDTO; now: number }) {
   if (booking.status === "CHECKED_OUT") {
-    const remainingMs = computeRemainingBudgetMs(booking);
+    // الاشتراك الشهري لا "ينتهي وقته" بالانصراف — يُعرض ما تبقّى من مدته بالأيام.
+    if (isResumableBookingType(booking.bookingType)) {
+      const days = remainingSubscriptionDays(booking, now);
+      return (
+        <span className="text-xs font-semibold text-gray-500">
+          {days > 0 ? `${dayCountLabel(days)} متبقٍ` : "انتهى الاشتراك"}
+        </span>
+      );
+    }
+    const remainingMs = computeRemainingBudgetMs(booking, now);
     if (remainingMs <= 0) {
       return <span className="text-xs font-semibold text-gray-400">انتهى الوقت بالكامل</span>;
     }

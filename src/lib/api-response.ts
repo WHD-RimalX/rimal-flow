@@ -10,8 +10,14 @@ import { InboundEventConflictError, InvalidSignatureError } from "@/lib/integrat
 /** يحوّل أي خطأ متوقع إلى استجابة HTTP موحدة مع رمز الحالة المناسب. */
 export function handleApiError(error: unknown) {
   if (error instanceof ZodError) {
+    // كل قاعدة تحقق تحمل رسالة عربية واضحة تشرح سبب الرفض بالضبط (خارج ساعات
+    // الدوام، يوم الجمعة إجازة، خارج شبكة ربع الساعة...) — لكنها كانت تُدفَن في
+    // `issues` بينما تُعرض للعميل رسالة عامة واحدة "بيانات غير صالحة" لا تفيده
+    // بشيء. نُبرز الآن أول رسالة فعلية كنص الخطأ، ونُبقي التفاصيل الكاملة في
+    // `issues` لمن يحتاجها برمجياً.
+    const first = error.errors[0]?.message;
     return NextResponse.json(
-      { error: "بيانات غير صالحة", issues: error.flatten() },
+      { error: first || "بيانات غير صالحة", issues: error.flatten() },
       { status: 400 }
     );
   }

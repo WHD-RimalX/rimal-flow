@@ -17,8 +17,15 @@ export const checkActionEnum = z.enum(["CHECK_IN", "CHECK_OUT"]);
  */
 export const checkInRequestSchema = z
   .object({
-    scanToken: z.string().trim().min(1).optional(),
-    bookingCode: z.string().trim().min(1).optional(),
+    // رسائل عربية صريحة على كل قاعدة: بدونها تُعيد Zod نصها الإنجليزي الافتراضي
+    // ("String must contain at least 1 character(s)") وهو ما كان يظهر لموظف
+    // الاستقبال حين تفشل قراءة رمز QR فيلتقط الماسح نصاً فارغاً.
+    scanToken: z
+      .string()
+      .trim()
+      .min(1, "تعذّرت قراءة رمز QR — قرّب الكاميرا وأعد المسح، أو أدخل كود الحجز يدوياً")
+      .optional(),
+    bookingCode: z.string().trim().min(1, "كود الحجز مطلوب").optional(),
     // مطلوب فقط مع المسار اليدوي؛ يُتجاهَل تماماً مع scanToken.
     action: checkActionEnum.optional(),
   })

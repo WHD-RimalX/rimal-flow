@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 const NAV_ITEMS = [
   { href: "/dashboard", label: "لوحة اليوم", icon: "🗓️" },
   { href: "/dashboard/calendar", label: "التقويم التفاعلي", icon: "📅" },
+  { href: "/dashboard/heatmap", label: "الخريطة الحرارية", icon: "🔥" },
   { href: "/dashboard/bookings", label: "سجل الحجوزات", icon: "📋" },
   { href: "/dashboard/subscribers", label: "المشتركون", icon: "👥" },
   { href: "/dashboard/walkins", label: "الزائرون", icon: "🚶" },

@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { useNow } from "@/lib/hooks/useNow";
-import { computeRemainingBudgetMs, formatDuration } from "@/lib/attendance";
-import { customerNameOf } from "@/lib/attendance";
-import { formatDateTime, formatSAR } from "@/lib/utils";
+import { customerNameOf, dayCountLabel, remainingSubscriptionDays } from "@/lib/attendance";
+import { formatDate, formatSAR } from "@/lib/utils";
 import type { BookingDTO, BookingType } from "@/types";
 
 const SUBSCRIPTION_TYPES: { type: BookingType; label: string; accent: string }[] = [
@@ -86,7 +85,9 @@ export function SubscribersPanel() {
               <div className="space-y-3">
                 {groupBookings.map((b) => {
                   const subStatus = deriveSubStatus(b, now);
-                  const remainingMs = computeRemainingBudgetMs(b);
+                  // رصيد الاشتراك بالأيام — هو ما يهم المشترك والإدارة معاً؛
+                  // الساعات تخص الجلسة الجارية فقط لا مدة الاشتراك.
+                  const remainingDays = remainingSubscriptionDays(b, now);
                   return (
                     <div key={b.id} className="rounded-xl border border-gray-100 p-3">
                       <div className="flex items-start justify-between gap-2">
@@ -101,12 +102,12 @@ export function SubscribersPanel() {
                       <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-gray-500">
                         <span>المساحة: {b.space.name}</span>
                         <span className="text-left">{formatSAR(Number(b.finalPrice))}</span>
-                        <span>بدأ: {formatDateTime(b.startTime)}</span>
-                        <span className="text-left">ينتهي: {formatDateTime(b.endTime)}</span>
+                        <span>بدأ: {formatDate(b.startTime)}</span>
+                        <span className="text-left">ينتهي: {formatDate(b.endTime)}</span>
                       </div>
                       {subStatus !== "EXPIRED" && subStatus !== "CANCELLED" && (
                         <p className="mt-2 text-xs font-semibold text-rimal-purple">
-                          الرصيد المتبقي: {formatDuration(remainingMs)}
+                          متبقٍ من الاشتراك: {dayCountLabel(remainingDays)}
                         </p>
                       )}
                     </div>
